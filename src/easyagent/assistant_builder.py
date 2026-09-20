@@ -105,7 +105,9 @@ Each tool name starts with code_namespace+'.'; set spec.effect='read' and spec.i
 Give exact input/output JSON Schemas and a useful description.
 Implement global handle(request), dispatching request.method to the tool handler and reading request.params;
 return {result: output}. lifecycle.* returns {result:{}}. No imports, files, network, host services or permissions.
-Include executable scenarios (tool,input,expected) covering ordinary and boundary cases. The runtime will independently
+Include 2 to 4 executable scenarios (tool,input,expected) covering valid ordinary and boundary inputs.
+expected must be the exact successful JSON output satisfying output_schema; never use null as an expected exception.
+The runtime will independently
 test the implementation, repair failures within a bounded budget, and register only a passing candidate.
 Prefer existing tools; generate only missing reusable operations. Expose each new tool as a distinct workflow step.
 Do not simulate model capabilities, external effects or successful receipts with code. Keep code_candidate=null when not needed.

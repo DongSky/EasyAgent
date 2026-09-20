@@ -6,7 +6,7 @@ import json
 from urllib.parse import urlsplit
 
 from pydantic import Field
-from jsonschema import ValidationError, SchemaError
+from jsonschema import ValidationError, SchemaError, validate
 
 from .code_development import CodeScenario
 from .contracts import Contract, ModelRequest, ToolSpec
@@ -103,12 +103,14 @@ class BuildCapabilities:
         state.update(updates)
         self.hub.store.checkpoint(ctx.job, state)
 
-    async def ask(self, ctx, model, schema, instruction, content, tokens=8192):
+    async def ask(self, ctx, model, schema, instruction, content, tokens=8192, check=None):
         messages = [{'role': 'system', 'content': instruction}, {'role': 'user', 'content': encode(content)}]
         for attempt in range(2):
             try:
                 result = await self.hub.generate(ctx.job, ModelRequest(model=model, capability='decision',
                     max_output_tokens=tokens, response_schema=schema, messages=messages))
+                if check:
+                    check(result.data)
                 return result.data
             except ValidationError as exc:
                 if attempt:
@@ -116,7 +118,7 @@ class BuildCapabilities:
                 messages.append({'role': 'user', 'content':
                     'Your previous response failed the required JSON schema. Return a complete corrected object, '
                     'without additional fields. Constraint: ' + str(exc.validator) + '=' + str(exc.validator_value)
-                    + '; path=' + '.'.join(map(str, exc.absolute_path))})
+                    + '; path=' + '.'.join(map(str, exc.absolute_path)) + '; detail=' + exc.message[:600]})
 
     async def verify(self, args, ctx):
         from .assistant_builder import BuildDraft, code_namespace, stored, validate_compiled
@@ -165,17 +167,24 @@ class BuildCapabilities:
                 names = [t.spec.name for t in code.manifest.tools]
                 if not state.get('checks'):
                     # The independent test author receives the requirement and interfaces, never implementation or expected values.
+                    def valid_checks(data):
+                        scenarios = IndependentChecks.model_validate(data).scenarios
+                        if (set(s.tool for s in scenarios) != set(names)
+                                or any(sum(s.tool == n for s in scenarios) < 2 for n in names)):
+                            raise ValidationError('Provide at least two tests for each tool and no unknown tools')
+                        specs = {t.spec.name: t.spec for t in code.manifest.tools}
+                        for scenario in scenarios:
+                            validate(scenario.input, specs[scenario.tool].input_schema)
+                            validate(scenario.expected, specs[scenario.tool].output_schema)
                     checks = await self.ask(ctx, args['model'], IndependentChecks.model_json_schema(),
                         'Write independent executable input/expected tests from the requirement and tool schemas. '
                         'Cover every tool, normal and boundary inputs. Expected results must follow the requirement. '
                         'Use 2 to 4 VALID input cases per tool, at most 12 total. Each case has ONLY tool, input, expected. '
                         'expected is the exact output JSON, not a description, assertion or expected error. '
                         'Do not weaken tests to fit an implementation. Pure deterministic processing only.',
-                        {'requirement': args['assistant']['purpose'], 'tools': [t.spec.model_dump() for t in code.manifest.tools]}, 4096)
+                        {'requirement': args['assistant']['purpose'], 'tools': [t.spec.model_dump() for t in code.manifest.tools]},
+                        4096, check=valid_checks)
                     checks = IndependentChecks.model_validate(checks)
-                    if (set(s.tool for s in checks.scenarios) != set(names)
-                            or any(sum(s.tool == n for s in checks.scenarios) < 2 for n in names)):
-                        raise ValueError('independent tests must cover normal and boundary inputs for each new node')
                     self.checkpoint(ctx, state, checks=checks.model_dump(), contracts=[t.spec.model_dump() for t in code.manifest.tools])
                 def interfaces(tools):
                     return [{k: t[k] for k in ('name', 'input_schema', 'output_schema')} for t in tools]

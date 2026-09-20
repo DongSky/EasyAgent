@@ -3,6 +3,7 @@ import base64
 import json
 
 import httpx
+import pytest
 from fastapi import FastAPI, Request
 
 from conftest import live_server
@@ -149,7 +150,8 @@ async def test_failed_generated_code_is_never_published(hub):
     assert not hub.extensions.active and not hub.skill_packages.list()
 
 
-async def test_invalid_test_generation_retries_tests_before_changing_code(hub):
+@pytest.mark.parametrize('problem', ['too_many', 'invalid_output'])
+async def test_invalid_test_generation_retries_tests_before_changing_code(hub, problem):
     class ExcessChecks(CSVBuilder):
         check_calls = 0
 
@@ -158,7 +160,10 @@ async def test_invalid_test_generation_retries_tests_before_changing_code(hub):
             if request.response_schema['title'] == 'IndependentChecks':
                 self.check_calls += 1
                 if self.check_calls == 1:
-                    result.data['scenarios'] *= 7
+                    if problem == 'too_many':
+                        result.data['scenarios'] *= 7
+                    else:
+                        result.data['scenarios'][0]['expected'] = None
             return result
     model = ExcessChecks()
     hub.models.register('planner', model, 'fixture', ['decision'])

@@ -14,7 +14,7 @@ from .store import Conflict, encode
 class CodeScenario(Contract):
     tool: str
     input: dict = Field(default_factory=dict)
-    expected: object
+    expected: object = Field(description="Exact successful JSON output matching output_schema. Expected exceptions are not supported.")
 
 
 class CodeCandidate(Contract):
@@ -63,6 +63,10 @@ class CodeDevelopment:
             raise PermissionError("generated pure tools must be read-only")
         if set(s.tool for s in body.scenarios) != set(a.spec.name for a in p.manifest.tools):
             raise ValueError("integration scenarios must cover every contributed tool")
+        specs = {a.spec.name: a.spec for a in p.manifest.tools}
+        for scenario in body.scenarios:
+            validate(scenario.input, specs[scenario.tool].input_schema)
+            validate(scenario.expected, specs[scenario.tool].output_schema)
         for old in self.list():
             if old["package"]["digest"] == p.digest and old["scenarios"] == [
                 s.model_dump() for s in body.scenarios
