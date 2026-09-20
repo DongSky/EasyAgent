@@ -150,6 +150,8 @@ uv run --extra app easyagent life --port 8770 --database .eah/life.db
 
 ## 部署与平台
 
+**桌面 App 打包**：GitHub Actions 的 [Desktop packages](.github/workflows/desktop.yml) 会为 macOS（Apple Silicon / Intel）和 Windows 64 位生成 ZIP 与 SHA-256 文件。在对应运行的 **Artifacts** 下载；也支持手动 **Run workflow**。桌面包自带 Python 和后端，启动后在系统浏览器打开工作室。下载、启动与签名状态见[桌面包说明](platforms/desktop/README.md)。
+
 默认仅监听本机，使用 SQLite 保存工作区数据，数据库为 `.eah/hub.db`。使用同一数据库重新启动，可继续读取已保存的助手、连接和任务记录。
 
 如需指定端口、使用独立工作区或关闭自动打开浏览器：

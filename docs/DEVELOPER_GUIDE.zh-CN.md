@@ -413,6 +413,8 @@ uv run --extra desktop python platforms/desktop/build.py
 
 输出位于 `.eah/build/desktop/`。包包含 Python 与纯计算运行依赖；Playwright 浏览器需另行准备。源码启动默认 `.eah/hub.db`；桌面启动器使用操作系统应用数据目录，或 `EAH_DATA_DIR` 覆盖。不要误把两个数据目录当作自动同步。
 
+[桌面 CI](../.github/workflows/desktop.yml) 在 main、版本标签、相关 PR 或手动触发时构建 macOS arm64/x86_64 与 Windows x86_64，解压后验证扩展执行、HTTP 和前端资源，再上传 ZIP 与 SHA-256。使用 `uv run --extra desktop python platforms/desktop/package.py` 可本机生成同样的已验证压缩包。预览包不包含开发者签名/公证，详细下载与使用说明见[桌面包](../platforms/desktop/README.md)。
+
 移动构建：
 
 ```sh

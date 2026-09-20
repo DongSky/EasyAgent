@@ -413,6 +413,8 @@ uv run --extra desktop python platforms/desktop/build.py
 
 Outputs go to `.eah/build/desktop/`. Python and pure-computation dependencies are bundled; Playwright browsers need separate preparation. Source startup defaults to `.eah/hub.db`; the desktop launcher uses the OS application-data directory or `EAH_DATA_DIR`. These locations do not automatically synchronize.
 
+[Desktop CI](../.github/workflows/desktop.yml) builds macOS arm64/x86_64 and Windows x86_64 on main, version tags, relevant PRs, or manual dispatch. It extracts and verifies extension execution, HTTP and frontend assets before uploading ZIPs and SHA-256 files. Run `uv run --extra desktop python platforms/desktop/package.py` locally for the same verified archives. Preview packages have no developer signing/notarization; see [desktop packages](../platforms/desktop/README.md) for download and startup instructions.
+
 Mobile builds:
 
 ```sh

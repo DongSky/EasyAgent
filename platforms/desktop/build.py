@@ -4,9 +4,11 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tomllib
 
 root = Path(__file__).resolve().parents[2]
 os.chdir(root)
+version = tomllib.loads((root / 'pyproject.toml').read_text())['project']['version']
 command = [
     sys.executable,
     "-m",
@@ -67,6 +69,23 @@ command = [
     "platforms/desktop/launcher.py",
 ]
 if sys.platform == "darwin":
-    command.insert(3, "--windowed")
-subprocess.run(command, check=True)
+    command[3:3] = ["--windowed", "--osx-bundle-identifier", "ai.easyagent.desktop"]
+logs = root / '.eah/build/logs'
+logs.mkdir(parents=True, exist_ok=True)
+with (logs / 'pyinstaller.log').open('w', encoding='utf-8') as log:
+    result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT)
+if result.returncode:
+    print((logs / 'pyinstaller.log').read_text(encoding='utf-8')[-16000:])
+    result.check_returncode()
+if sys.platform == 'darwin':
+    import plistlib
+
+    info = root / '.eah/build/desktop/EasyAgent.app/Contents/Info.plist'
+    with info.open('rb') as stream:
+        metadata = plistlib.load(stream)
+    metadata.update(CFBundleShortVersionString=version, CFBundleVersion=version)
+    with info.open('wb') as stream:
+        plistlib.dump(metadata, stream)
+    # Modifying Info.plist invalidates PyInstaller's ad-hoc signature; re-sign locally.
+    subprocess.run(['codesign', '--force', '--deep', '--sign', '-', str(info.parents[1])], check=True)
 print(root / ".eah/build/desktop")

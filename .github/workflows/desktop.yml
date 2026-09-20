@@ -1,0 +1,73 @@
+name: Desktop packages
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    paths:
+      - '.github/workflows/desktop.yml'
+      - 'platforms/desktop/**'
+      - 'src/**'
+      - 'sdk/python/**'
+      - 'apps/agent/**'
+      - 'examples/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: macos-arm64
+          - runner: macos-15-intel
+            target: macos-x86_64
+          - runner: windows-2025
+            target: windows-x86_64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.8.17'
+          enable-cache: true
+      - name: Install locked desktop dependencies
+        run: uv sync --extra desktop --locked --python 3.12
+      - name: Build application
+        run: uv run --no-sync python platforms/desktop/build.py
+      - name: Package and test the extracted application
+        run: uv run --no-sync python platforms/desktop/package.py --target ${{ matrix.target }}
+      - name: Upload portable application and checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: EasyAgent-${{ matrix.target }}-${{ github.sha }}
+          path: .eah/build/releases/*
+          if-no-files-found: error
+          compression-level: 0
+          include-hidden-files: true
+          retention-days: 14
+      - name: Upload build and smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-logs-${{ matrix.target }}-${{ github.sha }}
+          path: .eah/build/logs/
+          if-no-files-found: ignore
+          include-hidden-files: true
+          retention-days: 14

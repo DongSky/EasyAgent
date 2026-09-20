@@ -150,6 +150,8 @@ Open [http://127.0.0.1:8770/life](http://127.0.0.1:8770/life). This local, singl
 
 ## Deployment and platforms
 
+**Desktop App packages**: the [Desktop packages](.github/workflows/desktop.yml) GitHub Actions workflow produces ZIPs and SHA-256 files for macOS (Apple Silicon / Intel) and 64-bit Windows. Download them from the run’s **Artifacts**, or start **Run workflow** manually. Packages bundle Python and the backend and open Studio in your system browser. See [desktop packaging](platforms/desktop/README.md) for startup instructions and signing status.
+
 By default, the service listens on localhost and stores workspace data in SQLite at `.eah/hub.db`. Restarting with the same database restores saved assistants, connections, and run records.
 
 To choose a port, use a separate workspace, or skip opening the browser:

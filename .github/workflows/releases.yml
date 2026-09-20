@@ -1,21 +1,10 @@
 name: Build desktop and mobile artifacts
 on: workflow_dispatch
+permissions:
+  contents: read
 jobs:
   desktop:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - run: uv sync --extra desktop --locked --python 3.12
-      - run: uv run --extra desktop python platforms/desktop/build.py
-      - uses: actions/upload-artifact@v4
-        with:
-          name: desktop-${{ matrix.os }}
-          path: .eah/build/desktop/
+    uses: ./.github/workflows/desktop.yml
   ios:
     runs-on: macos-latest
     steps:
