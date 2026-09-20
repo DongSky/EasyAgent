@@ -82,6 +82,14 @@ Use the API base URL documented by the provider. Do not accidentally enter a com
 
 Model keys saved in Settings are encrypted in the local credential store and restored on restart. They are not filled back into forms or included in workflow exports. A passing connection test proves one request, not all parameter combinations, output quality, or account capacity.
 
+### Manage and select models
+
+Each model added in the UI has **Edit** and **Delete** controls. A blank API key preserves the saved credential when editing; changing the endpoint requires entering the key again. Connection aliases are stable workflow references. Models supplied by configuration files or extensions must be changed at their source.
+
+Use **Read available models** to fetch IDs from the service, or enter an ID manually. Listing does not generate content. **Save only** skips the potentially billable test. Select a default in settings, or select a particular model above the chat composer and in the assistant builder. Selection persists; wait for queued and active turns to finish before switching an existing conversation.
+
+Deleting a connection removes its encrypted key and disables derived image adapters. History remains, while existing references require a replacement or a rebuilt workflow. Changing a default or conversation model does not rewrite model steps in saved workflows.
+
 ### Configure TinyFish search
 
 In **Web search** (`联网搜索`), enter your own TinyFish API key and choose **Save connection** or **Save and test**. You can replace a key and test the current connection. Leaving the key blank preserves a previously saved settings key; it does not delete it.

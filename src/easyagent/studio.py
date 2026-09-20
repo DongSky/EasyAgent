@@ -49,6 +49,14 @@ class Connection(Contract):
     capabilities: list[str] = Field(default_factory=lambda: ["chat", "decision"])
 
 
+class ConnectionDiscovery(Connection):
+    model: str = ""
+
+
+class DefaultModel(Contract):
+    alias: str | None = None
+
+
 TEMPLATES = [
     {"id": "organizer", "name": "事项整理助手", "description": "从通知提取待办事项和截止日期",
      "purpose": "整理用户提供的材料，列出事项、负责人、截止日期与需要确认的问题。缺失信息应明确标注，不要编造。", "tools": []},
@@ -197,10 +205,10 @@ def install_studio(app, hub):
         hub.development.get("workflow", identifier)
         return hub.development.save_workflow(identifier, workflow, expected_revision)
 
-    def connection_provider(body: Connection):
+    def connection_provider(body: Connection, *, existing=None):
         from urllib.parse import urlparse
         parsed = urlparse(body.base_url)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password:
+        if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise ValueError("模型地址必须是有效的 HTTP(S) 地址，不能在地址中包含密码")
         if parsed.scheme != "https" and parsed.hostname not in ("127.0.0.1", "localhost", "::1"):
             raise ValueError("远程模型请使用 HTTPS")
@@ -208,9 +216,18 @@ def install_studio(app, hub):
             raise ValueError("未知模型能力")
         if body.dialect == "anthropic" and set(body.capabilities) - {"chat", "decision"}:
             raise ValueError("Anthropic Messages 适配器仅支持 chat 和 decision")
+        key = body.api_key
+        if existing and not key and existing.get('credential'):
+            # A blank password means keep it, but never forward it to a new endpoint.
+            if body.base_url.rstrip('/') != existing['base_url'].rstrip('/'):
+                raise ValueError("修改服务地址时请重新填写 API Key，避免把原凭证发送到新地址")
+            key = hub.connections.secret(existing['credential'])
+        return HTTPProvider(body.base_url, key, body.dialect)
+
+    def new_provider(body):
         if body.alias in hub.models.bindings:
-            raise ValueError("这个连接名称已存在，请填写另一个名称")
-        return HTTPProvider(body.base_url, body.api_key, body.dialect)
+            raise ValueError("这个连接名称已存在，请编辑已有连接或填写另一个名称")
+        return connection_provider(body)
 
     async def test_provider(provider, model, capabilities):
         capability = next(c for c in ("chat", "decision", "embedding", "image") if c in capabilities)
@@ -229,16 +246,67 @@ def install_studio(app, hub):
 
     @app.post("/v1/studio/connections")
     async def connection(body: Connection):
-        provider = connection_provider(body)
+        provider = new_provider(body)
         hub.connections.save_model(body,provider)
         return {"alias": body.alias, "message": "连接已保存，凭证加密存储，重启后自动恢复。"}
 
     @app.post("/v1/studio/connections/test-and-save")
     async def test_and_save_connection(body: Connection):
-        provider = connection_provider(body)
+        provider = new_provider(body)
         result = await test_provider(provider, body.model, body.capabilities)
         hub.connections.save_model(body,provider)
         return {"alias": body.alias, **result}
+
+    @app.get("/v1/studio/connections")
+    async def model_connections():
+        return hub.connections.model_catalog()
+
+    @app.put("/v1/studio/model-default")
+    async def default_model(body: DefaultModel):
+        hub.connections.set_default_model(body.alias)
+        return {'default_model': body.alias}
+
+    @app.post("/v1/studio/connections/discover")
+    async def discover_models(body: ConnectionDiscovery, existing_alias: str | None = None):
+        config = hub.connections.model_config(existing_alias) if existing_alias else None
+        provider = connection_provider(body, existing=config)
+        headers = ({'x-api-key': provider.api_key, 'anthropic-version': '2023-06-01'}
+                   if provider.dialect == 'anthropic' else
+                   ({'Authorization': 'Bearer ' + provider.api_key} if provider.api_key else {}))
+        try:
+            async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
+                async with client.stream('GET', provider.base_url + '/models', headers=headers) as response:
+                    response.raise_for_status()
+                    chunks, size = [], 0
+                    async for chunk in response.aiter_bytes():
+                        size += len(chunk)
+                        if size > 2_000_000:
+                            raise ValueError('model catalog too large')
+                        chunks.append(chunk)
+            data = json.loads(b''.join(chunks))
+            models = sorted({row['id'] for row in data['data'] if isinstance(row.get('id'), str)})[:2000]
+        except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            raise HTTPException(502, '无法读取模型列表，请检查地址和凭证，或手动填写模型 ID。') from exc
+        return {'models': models}
+
+    @app.put("/v1/studio/connections/{alias}")
+    async def update_connection(alias: str, body: Connection, test: bool = False):
+        if alias != body.alias:
+            raise ValueError('连接名称用于工作流引用，不能修改；请新建另一个连接')
+        config = hub.connections.model_config(alias)
+        original = hub.models.bindings.get(alias)
+        hub.connections.assert_model_idle(alias)
+        provider = connection_provider(body, existing=config)
+        result = await test_provider(provider, body.model, body.capabilities) if test else {}
+        if hub.models.bindings.get(alias) is not original:
+            raise HTTPException(409, '测试期间连接已被修改或删除，请刷新后重试')
+        hub.connections.save_model(body, provider, replace=True)
+        return {'alias': alias, **result}
+
+    @app.delete("/v1/studio/connections/{alias}")
+    async def delete_connection(alias: str):
+        hub.connections.delete_model(alias)
+        return {'alias': alias, 'deleted': True}
 
     @app.post("/v1/studio/connections/{alias}/test")
     async def test_connection(alias: str):

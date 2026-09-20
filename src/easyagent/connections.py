@@ -1,6 +1,7 @@
 """Local encrypted credentials and managed connector delivery; no key values in catalogues."""
 
 import asyncio
+import hashlib
 from datetime import datetime, timezone
 import json
 import os
@@ -15,7 +16,7 @@ from pydantic import Field, model_validator
 
 from .contracts import Contract, ToolSpec
 from .http_tools import HTTPTool
-from .store import encode
+from .store import Conflict, encode
 
 
 class SecretWrite(Contract):
@@ -91,14 +92,114 @@ class Connections:
                     config["capabilities"],
                 )
 
-    def save_model(self, body, provider):
+    def model_config(self, alias):
+        with self.store.connect() as db:
+            row = db.execute("SELECT value FROM memory WHERE namespace='model-connections' AND key=?", (alias,)).fetchone()
+        if not row:
+            raise KeyError(alias)
+        return json.loads(row[0])
+
+    def default_model(self):
+        with self.store.connect() as db:
+            row = db.execute("SELECT value FROM memory WHERE namespace='model-settings' AND key='default'").fetchone()
+        return json.loads(row[0]) if row else None
+
+    def set_default_model(self, alias):
+        from .models import MockProvider
+        binding = self.hub.models.bindings.get(alias)
+        if alias is not None and (not binding or 'decision' not in binding.capabilities
+                                  or isinstance(binding.provider, MockProvider)):
+            raise ValueError("请选择支持结构化决策的已连接模型")
+        self.store.memory_put('model-settings', 'default', alias, 'operator')
+
+    def model_catalog(self):
+        result = []
+        for item in self.hub.models.catalog():
+            try:
+                config = self.model_config(item['alias'])
+            except KeyError:
+                config = None
+            result.append({**item, 'managed': config is not None,
+                           **({k: config[k] for k in ('base_url', 'dialect')} if config else {}),
+                           'has_key': bool(config and config.get('credential'))})
+        return {'connections': result, 'default_model': self.default_model()}
+
+    def assert_model_idle(self, alias):
+        prefix = 'media.' + hashlib.sha256(alias.encode()).hexdigest()[:12]
+        names = {alias, prefix + '.generations', prefix + '.edits'}
+
+        def uses(value):
+            if isinstance(value, str):
+                return value in names
+            if isinstance(value, dict):
+                return any(uses(v) for v in value.values())
+            return isinstance(value, list) and any(uses(v) for v in value)
+
+        with self.store.connect() as db:
+            for row in db.execute("SELECT spec FROM runs WHERE status NOT IN ('succeeded','failed','cancelled')"):
+                if uses(json.loads(row[0])):
+                    raise Conflict("这个模型仍被未完成任务使用，请先完成或停止相关任务")
+            from .assistant_builder import select_model
+            try:
+                automatic = select_model(self.hub, 'auto') == alias
+            except ValueError:
+                automatic = False
+            if db.execute("SELECT 1 FROM conversations c JOIN conversation_turns t ON t.conversation=c.id "
+                          "WHERE (c.model=? OR (c.model='auto' AND ?)) "
+                          "AND t.status IN ('queued','starting','running') LIMIT 1", (alias, automatic)).fetchone():
+                raise Conflict("对话仍有待处理消息，请先完成或停止本轮再修改模型连接")
+
+    def retire_model_media(self, alias):
+        # Derived adapters have their own encrypted credential. Revoke it as well,
+        # so an old workflow cannot keep using a deleted or replaced connection.
+        prefix = 'media.' + hashlib.sha256(alias.encode()).hexdigest()[:12]
+        with self.store.connect() as db:
+            db.execute('DELETE FROM vault WHERE name=?', (prefix,))
+        for mode in ('generations', 'edits'):
+            name = prefix + '.' + mode
+            try:
+                self.hub.development.set_archived('api', name, reason='模型连接已修改或删除')
+                for version in self.hub.development.list_versions('api', name):
+                    self.store.memory_put('disabled-model-adapters', f"{name}@{version['revision']}", True, 'operator')
+            except KeyError:
+                continue
+
+    def save_model(self, body, provider, *, replace=False):
+        from .models import ModelBinding
+        old = self.model_config(body.alias) if replace else None
+        if replace:
+            self.assert_model_idle(body.alias)
+        elif body.alias in self.hub.models.bindings:
+            raise Conflict("这个连接名称已存在")
         config = body.model_dump(exclude={"api_key"})
-        if body.api_key:
+        if provider.api_key:
             alias = "model." + body.alias
-            self.put_secret(alias, body.api_key)
             config["credential"] = alias
-        self.store.memory_put("model-connections", body.alias, config, "operator")
-        self.hub.models.register(body.alias, provider, body.model, body.capabilities)
+            encrypted = self.cipher().encrypt(provider.api_key.encode()).decode()
+        with self.store.transaction() as db:
+            if provider.api_key:
+                db.execute("INSERT OR REPLACE INTO vault VALUES(?,?)", (alias, encrypted))
+            elif old and old.get('credential'):
+                db.execute('DELETE FROM vault WHERE name=?', (old['credential'],))
+            db.execute("INSERT OR REPLACE INTO memory VALUES('model-connections',?,?,?,?)",
+                       (body.alias, encode(config), 'operator', time.time()))
+        self.hub.models.bindings[body.alias] = ModelBinding(provider, body.model, set(body.capabilities))
+        if replace:
+            self.retire_model_media(body.alias)
+        if self.default_model() == body.alias and 'decision' not in body.capabilities:
+            self.set_default_model(None)
+
+    def delete_model(self, alias):
+        config = self.model_config(alias)
+        self.assert_model_idle(alias)
+        self.retire_model_media(alias)
+        with self.store.transaction() as db:
+            db.execute("DELETE FROM memory WHERE namespace='model-connections' AND key=?", (alias,))
+            if config.get('credential'):
+                db.execute('DELETE FROM vault WHERE name=?', (config['credential'],))
+        self.hub.models.bindings.pop(alias, None)
+        if self.default_model() == alias:
+            self.set_default_model(None)
 
     def cipher(self):
         if not self.key_path.exists():

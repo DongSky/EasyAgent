@@ -41,6 +41,9 @@ def select_model(hub, requested):
         candidates = [(requested, hub.models.bindings.get(requested))]
     else:
         candidates = list(reversed(list(hub.models.bindings.items())))
+        preferred = hub.connections.default_model()
+        if preferred:
+            candidates = [(preferred, hub.models.bindings.get(preferred))] + candidates
     for alias, binding in candidates:
         if binding and "decision" in binding.capabilities and not isinstance(binding.provider, MockProvider):
             return alias

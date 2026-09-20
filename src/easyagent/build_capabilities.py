@@ -86,8 +86,9 @@ def prepare_connected_media(hub):
                 old = hub.development.get('api', name)
             except KeyError:
                 old = None
-            if not old or old['definition'] != public:
+            if not old or old['definition'] != public or name in hub.development.archived_ids('api'):
                 hub.development.put('api', name, public, old['revision'] if old else 0)
+            hub.development.set_archived('api', name, False)
             hub.development.refresh_api(name)
 
 

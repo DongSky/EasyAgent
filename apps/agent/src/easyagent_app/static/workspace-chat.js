@@ -1,3 +1,4 @@
+import {modelChoices} from './model-choice.js';
 import {toolLabels} from './ui-labels.js';
 import {formatChat} from './chat-format.js';
 import {uploadMedia,bindMedia,clearMedia,canPreview} from './media-preview.js';
@@ -9,11 +10,20 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
   <div class="chat-layout"><aside class="chat-history"><button class="chat-new" data-new>＋ 新对话</button><label class="chat-search"><span class="sr-only">搜索对话</span><input type="search" data-search placeholder="搜索对话"></label><div data-history></div></aside>
   <article class="chat-room"><header class="chat-room-heading"><div><span class="chat-presence"></span><strong data-title>新对话</strong></div><div class="chat-mobile-tools"><button class="small" data-history-toggle aria-expanded="false">历史</button><button class="small" data-new-mobile>＋ 新对话</button></div></header>
   <div class="chat-scroll" data-scroll><div data-welcome class="chat-welcome"><div class="chat-starters"><button data-starter="帮我整理这份通知，列出要做的事和截止日期。"><span>▤</span><b>整理材料</b><small>通知、文档、会议记录</small></button><button data-starter="帮我找到合适的已有流程，处理我上传的图片。"><span>◇</span><b>使用已有流程</b></button><button data-starter="帮我创建一个可以重复使用的流程：" data-create-starter><span>⌘</span><b>创建流程</b></button></div></div><div data-timeline></div></div>
-  <form class="chat-composer" data-compose><div class="chat-composer-top"><label><span class="sr-only">如何处理这条消息</span><select data-destination><option value="auto">✦ 自动安排</option><option value="create">＋ 创建新流程</option><option value="chat">仅对话</option></select></label><span data-context>优先复用已有流程</span></div><div class="chat-attachments" data-files></div><label class="sr-only" for="workspaceMessage">你的需求</label><textarea id="workspaceMessage" data-text rows="3" placeholder="输入需求，或拖入附件"></textarea><div class="chat-composer-bottom"><button type="button" data-attach class="chat-attach" aria-label="添加图片、视频、音频或文档">＋ <span>添加附件</span></button><input type="file" multiple hidden data-file-input accept="image/*,audio/*,video/*,.pdf,.docx,.txt,.md,.csv,.json,.yaml,.yml"><span class="chat-compose-hint">Enter 发送 · Shift + Enter 换行</span><button type="button" data-stop class="small" hidden>停止本轮</button><button class="chat-send" data-send aria-label="发送需求">发送 <span aria-hidden="true">↑</span></button></div><p data-error class="chat-inline-error" role="alert" hidden></p></form><p class="chat-footnote" data-queue>附件会提交给所用服务；外部修改需确认。</p><div class="chat-drop-zone" data-drop hidden>松开添加附件<span>图片 · 视频 · 音频 · 文档</span></div></article></div>`;
+  <form class="chat-composer" data-compose><div class="chat-composer-top"><label><span class="sr-only">如何处理这条消息</span><select data-destination><option value="auto">✦ 自动安排</option><option value="create">＋ 创建新流程</option><option value="chat">仅对话</option></select></label><label class="chat-model-choice">模型<select data-model aria-label="处理模型"><option value="auto">自动选择已连接模型</option></select></label><span data-context>优先复用已有流程</span></div><div class="chat-attachments" data-files></div><label class="sr-only" for="workspaceMessage">你的需求</label><textarea id="workspaceMessage" data-text rows="3" placeholder="输入需求，或拖入附件"></textarea><div class="chat-composer-bottom"><button type="button" data-attach class="chat-attach" aria-label="添加图片、视频、音频或文档">＋ <span>添加附件</span></button><input type="file" multiple hidden data-file-input accept="image/*,audio/*,video/*,.pdf,.docx,.txt,.md,.csv,.json,.yaml,.yml"><span class="chat-compose-hint">Enter 发送 · Shift + Enter 换行</span><button type="button" data-stop class="small" hidden>停止本轮</button><button class="chat-send" data-send aria-label="发送需求">发送 <span aria-hidden="true">↑</span></button></div><p data-error class="chat-inline-error" role="alert" hidden></p></form><p class="chat-footnote" data-queue>附件会提交给所用服务；外部修改需确认。</p><div class="chat-drop-zone" data-drop hidden>松开添加附件<span>图片 · 视频 · 音频 · 文档</span></div></article></div>`;
   document.querySelector('main').append(page);
   const $=s=>page.querySelector(s),guard=fn=>async e=>{try{await fn(e)}catch(error){$('[data-error]').textContent=error.message;$('[data-error]').hidden=false;flash(error.message);}};
   const floating=document.createElement('button');floating.className='chat-launcher';floating.innerHTML='<span aria-hidden="true">✦</span> 对话办事';floating.setAttribute('aria-label','打开对话办事入口');floating.onclick=()=>nav.click();document.body.append(floating);
-  let selected=null,polling=false,sending=false,uploading=0,files=[],catalog=[],historyRows=[],signature='',searchTimer=null;
+  let selected=null,polling=false,sending=false,uploading=0,files=[],catalog=[],historyRows=[],signature='',searchTimer=null,modelList=[],defaultModel=null,chosenModel=localStorage.getItem('easyagent.workspaceModel')||'auto',modelBusy=false,turnBusy=false;
+  function drawModel(){modelChoices($('[data-model]'),modelList,chosenModel,defaultModel);$('[data-model]').disabled=turnBusy||sending||modelBusy;}
+  async function loadModels(){const data=await api('/v1/studio/connections');modelList=data.connections;defaultModel=data.default_model;drawModel();}
+  $('[data-model]').onchange=guard(async()=>{
+    const value=$('[data-model]').value,id=selected;modelBusy=true;drawFiles();drawModel();
+    try{if(id)await api('/v1/conversations/'+id,'PATCH',{model:value});
+      if(id===selected){chosenModel=value;localStorage.setItem('easyagent.workspaceModel',value);signature='';}
+    }finally{modelBusy=false;drawModel();drawFiles();}
+  });
+  window.addEventListener('eah:connections-changed',()=>loadModels().catch(e=>flash(e.message)));
   const drafts=new Map(),cards=new Map(),runCache=new Map();
   const size=n=>n<1e6?Math.ceil(n/1000)+' KB':(n/1e6).toFixed(1)+' MB';
   const glyph=type=>({image:'▧',audio:'♫',video:'▷',document:'▤'})[type]||'▤';
@@ -30,7 +40,7 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
   function drawFiles(){
     $('[data-files]').innerHTML=files.map((f,i)=>`<div class="chat-file ${f.error?'has-error':''}"><span>${glyph(f.kind||f.type?.split('/')[0])}</span><div><b>${escape(f.name)}</b><small>${f.error?'上传失败 · 移除后可重新添加':f.id?size(f.size):'正在上传…'}</small></div><button type="button" data-remove="${i}" aria-label="移除 ${escape(f.name)}">×</button></div>`).join('');
     $('[data-files]').querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{files.splice(Number(b.dataset.remove),1);drawFiles();});
-    $('[data-send]').disabled=!!uploading||sending;
+    $('[data-send]').disabled=!!uploading||sending||modelBusy;$('[data-model]').disabled=turnBusy||sending||modelBusy;
   }
   async function attach(incoming){
     if(files.length+incoming.length>8)throw Error('每条消息最多添加 8 个附件。');
@@ -51,7 +61,7 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
   page.addEventListener('dragover',e=>{if(e.dataTransfer?.types.includes('Files'))e.preventDefault();});
   page.addEventListener('dragleave',()=>{if(--dragDepth<=0)$('[data-drop]').hidden=true;});
   page.addEventListener('drop',guard(async e=>{if(!e.dataTransfer?.files.length)return;e.preventDefault();dragDepth=0;$('[data-drop]').hidden=true;await attach([...e.dataTransfer.files]);}));
-  async function choose(id){closeHistory();persistDraft();selected=id;signature='';clearCards();restoreDraft();localStorage.setItem('easyagent.workspaceConversation',id||'');$('[data-title]').textContent='新对话';$('[data-welcome]').hidden=!!id;drawHistory();if(id)await refresh();}
+  async function choose(id){closeHistory();persistDraft();selected=id;signature='';turnBusy=false;if(!id)chosenModel=localStorage.getItem('easyagent.workspaceModel')||'auto';drawModel();clearCards();restoreDraft();localStorage.setItem('easyagent.workspaceConversation',id||'');$('[data-title]').textContent='新对话';$('[data-welcome]').hidden=!!id;drawHistory();if(id)await refresh();}
   const newChat=guard(async()=>{await choose(null);$('[data-text]').focus();});$('[data-new]').onclick=$('[data-new-mobile]').onclick=newChat;
   function drawHistory(){const query=$('[data-search]').value.trim().toLowerCase();$('[data-history]').innerHTML=historyRows.filter(r=>r.title.toLowerCase().includes(query)).map(r=>`<button data-thread="${escape(r.id)}" class="chat-history-item ${r.id===selected?'active':''}"><span>${escape(r.title)}</span><small>${r.active_run?'● 正在处理':new Date(r.created*1000).toLocaleDateString()}</small></button>`).join('')||(query?'<p class="empty-hint">没有匹配的对话</p>':'<p class="empty-hint">暂无对话</p>');$('[data-history]').querySelectorAll('[data-thread]').forEach(b=>b.onclick=guard(()=>choose(b.dataset.thread)));}
   async function listing(){historyRows=(await api('/v1/conversations')).filter(r=>r.workspace);drawHistory();}
@@ -60,13 +70,13 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
   $('[data-destination]').onchange=()=>{$('[data-context]').textContent=$('[data-destination]').value==='auto'?'优先复用已有流程':$('[data-destination]').value==='create'?'生成并保存流程':$('[data-destination]').value==='chat'?'不执行工作流':'使用指定流程的固定版本';};
   page.querySelectorAll('[data-starter]').forEach(b=>b.onclick=()=>{$('[data-text]').value=b.dataset.starter;if(b.hasAttribute('data-create-starter'))$('[data-destination]').value='create';$('[data-destination]').dispatchEvent(new Event('change'));$('[data-text]').focus();});
   async function send(event){
-    event?.preventDefault();if(sending||uploading)return;
+    event?.preventDefault();if(sending||uploading||modelBusy)return;
     if(files.some(f=>f.error||!f.id))throw Error('请移除上传失败的附件，或重新上传。');
     const text=$('[data-text]').value.trim();if(!text&&!files.length)return;
     const destination=$('[data-destination]').value,attachments=files.map(f=>f.id);
     sending=true;drawFiles();$('[data-error]').hidden=true;
     try{
-      if(!selected){const c=await api('/v1/conversations','POST',{workspace:true,model:'auto',title:(text||files[0]?.name||'新的对话').slice(0,60)});selected=c.id;localStorage.setItem('easyagent.workspaceConversation',selected);}
+      if(!selected){const c=await api('/v1/conversations','POST',{workspace:true,model:chosenModel,title:(text||files[0]?.name||'新的对话').slice(0,60)});selected=c.id;localStorage.setItem('easyagent.workspaceConversation',selected);}
       const id=selected;
       // Retain the key on transport failure so retry cannot duplicate a model call or run.
       const payload={text,attachments,intent:['auto','create','chat'].includes(destination)?destination:'workflow',...(!['auto','create','chat'].includes(destination)?{workflow:destination}:{})};
@@ -145,6 +155,7 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
   }
   async function paint(c){
     const history=historyRows.find(r=>r.id===c.id);if(history&&history.active_run!==c.active_run){history.active_run=c.active_run;drawHistory();}
+    chosenModel=c.model;turnBusy=!!c.active_run||c.turns.some(t=>!['succeeded','failed','cancelled'].includes(t.status));drawModel();
     const pinned=nearBottom();$('[data-title]').textContent=c.title;$('[data-welcome]').hidden=c.turns.length>0;$('[data-stop]').hidden=!c.turns.some(t=>!['succeeded','failed','cancelled'].includes(t.status));
     for(const turn of c.turns){
       const state=turn.task;if(!state)continue;const entry=ensureCard(turn),root=entry.root,find=s=>root.querySelector(s);
@@ -177,7 +188,7 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
   }
   async function downloadArtifact(a){const r=await fetch('/v1/artifacts/'+encodeURIComponent(a.id)+'/content',{headers:token()?{Authorization:'Bearer '+token()}:{}});if(!r.ok)throw Error('文件读取失败');download(await r.blob(),a.name);}
   async function refresh(){if(!selected||polling)return;polling=true;const id=selected;try{const c=await api('/v1/conversations/'+id);if(id!==selected)return;const next=JSON.stringify(c);if(next!==signature||c.active_run){signature=next;window.dispatchEvent(new CustomEvent('eah:conversation',{detail:{id:c.id}}));window.dispatchEvent(new CustomEvent('eah:message',{detail:{conversation:c.id,messages:c.messages}}));await paint(c);}}finally{polling=false;}}
-  nav.onclick=guard(async()=>{showTab('conversations');await Promise.all([listing(),loadCatalog()]);if(!selected){const cached=localStorage.getItem('easyagent.workspaceConversation');if(historyRows.some(r=>r.id===cached))await choose(cached);}await refresh();});
+  nav.onclick=guard(async()=>{showTab('conversations');await Promise.all([listing(),loadCatalog(),loadModels()]);if(!selected){const cached=localStorage.getItem('easyagent.workspaceConversation');if(historyRows.some(r=>r.id===cached))await choose(cached);}await refresh();});
   document.addEventListener('eah:route',e=>{floating.hidden=e.detail.id==='conversations';if(e.detail.id!=='conversations')for(const entry of cards.values())stopWatch(entry.details);});
   document.addEventListener('eah:chat-workflow',guard(async e=>{await nav.onclick();await choose(null);$('[data-destination]').value=e.detail.key;$('[data-destination]').dispatchEvent(new Event('change'));$('[data-text]').focus();}));
   setInterval(()=>{if(page.classList.contains('active')&&!document.hidden)refresh().catch(e=>flash(e.message));},800);

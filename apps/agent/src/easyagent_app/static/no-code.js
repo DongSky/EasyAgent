@@ -1,12 +1,15 @@
+import {modelChoices} from './model-choice.js';
 // One source of truth: persist the compiled graph, preview it, run it, export it.
 export function noCodeBuilder({api,$,escape,download,watch,loadWorkflow,showTab,listWorkflows,flash,token,shareWorkflow}) {
-  let identifier=null,plan=null,savedSignature='',preferredModel='auto',busy=false,epoch=0;
-  const signature=()=>JSON.stringify([$('assistantName').value,$('purpose').value]);
+  let identifier=null,plan=null,savedSignature='',preferredModel='auto',availableModels=[],defaultModel=null,busy=false,epoch=0;
+  const signature=()=>JSON.stringify([$('assistantName').value,$('purpose').value,preferredModel]);
+  const drawModels=()=>modelChoices($('assistantModel'),availableModels,preferredModel,defaultModel);
+  $('assistantModel').onchange=()=>{preferredModel=$('assistantModel').value;invalidate();};
   const report=error=>{flash(error.message);$('savedLabel').textContent=error.message;};
   const guard=fn=>async e=>{e?.preventDefault();try{await fn(e)}catch(error){report(error)}};
   function invalidate(){plan=null;$('runResult').replaceChildren();$('tryBtn').disabled=true;$('savedLabel').textContent='需求已修改，请重新生成';renderStatus({status:'stale',message:'需求已修改，请重新生成。'});}
   $('assistantName').oninput=invalidate;$('purpose').oninput=invalidate;
-  $('newAssistant').onclick=()=>{$('runResult').replaceChildren();$('message').value='';epoch++;identifier=null;preferredModel='auto';plan=null;$('assistantName').value='我的新助手';$('purpose').value='';$('savedLabel').textContent='';$('tryBtn').disabled=true;renderStatus({status:'not_built'});};
+  $('newAssistant').onclick=()=>{$('runResult').replaceChildren();$('message').value='';epoch++;identifier=null;preferredModel='auto';drawModels();plan=null;$('assistantName').value='我的新助手';$('purpose').value='';$('savedLabel').textContent='';$('tryBtn').disabled=true;renderStatus({status:'not_built'});};
   function dependencies(w){const labels=w.metadata?.step_labels||{};return w.steps.map(s=>`<li><strong>${escape(labels[s.id]||s.id)}</strong><span>${escape(({tool:'调用接口',model:'模型处理',agent:'智能处理',input:'补充信息',approval:'人工确认',artifact:'保存结果',transform:'整理数据',retrieve:'检索资料',foreach:'批量处理',subworkflow:'子流程'})[s.kind]||s.kind)}${s.target?' · '+escape(s.target):''}</span><small>${s.depends_on.length?'等待 '+s.depends_on.map(id=>escape(labels[id]||id)).join('、'):'无前置步骤'}${s.body?' · 子流程含 '+s.body.steps.length+' 个步骤':''}</small></li>`).join('');}
   function diagram(w){
     const labels=w.metadata?.step_labels||{},levels=new Map(),pending=new Map(w.steps.map(s=>[s.id,s]));
@@ -42,7 +45,7 @@ export function noCodeBuilder({api,$,escape,download,watch,loadWorkflow,showTab,
   async function list(){
     const rows=await api('/v1/studio/assistants');
     $('savedAssistants').innerHTML=rows.length?rows.map(a=>`<div class="saved-row"><div><b>${escape(a.name)}</b><div class="muted">${a.construction==='automatic'?'按需求生成':'旧版配置 · 可重新生成'}</div></div><div class="actions"><button data-load="${a.id}">打开助手</button>${a.construction==='automatic'?`<button data-export="${a.id}">导出项目</button>`:''}</div></div>`).join(''):'<div class="empty-state"><h3>暂无助手</h3><button class="primary" data-go="create">创建助手</button></div>';
-    $('savedAssistants').querySelectorAll('[data-load]').forEach(b=>b.onclick=guard(async()=>{epoch++;const a=rows.find(x=>x.id===b.dataset.load);identifier=a.id;$('runResult').replaceChildren();preferredModel=a.model==='mock'?'auto':a.model;$('assistantName').value=a.name;$('purpose').value=a.purpose;savedSignature=signature();$('savedLabel').textContent='已载入';showTab('create');renderStatus(await api('/v1/studio/assistants/'+identifier+'/workflow'));}));
+    $('savedAssistants').querySelectorAll('[data-load]').forEach(b=>b.onclick=guard(async()=>{epoch++;const a=rows.find(x=>x.id===b.dataset.load);identifier=a.id;$('runResult').replaceChildren();preferredModel=a.model==='mock'?'auto':a.model;drawModels();$('assistantName').value=a.name;$('purpose').value=a.purpose;savedSignature=signature();$('savedLabel').textContent='已载入';showTab('create');renderStatus(await api('/v1/studio/assistants/'+identifier+'/workflow'));}));
     $('savedAssistants').querySelectorAll('[data-export]').forEach(b=>b.onclick=guard(()=>exportProject(b.dataset.export)));
   }
   $('assistantForm').onsubmit=guard(async()=>{
@@ -70,10 +73,11 @@ export function noCodeBuilder({api,$,escape,download,watch,loadWorkflow,showTab,
   });
   $('refreshAssistants').onclick=guard(list);
   return {async refresh(models){
+    const managed=await api('/v1/studio/connections');availableModels=models;defaultModel=managed.default_model;drawModels();
     const available=models.filter(m=>m.alias!=='mock'&&m.capabilities.includes('decision'));
-    $('automaticModelStatus').textContent=available.length?'自动使用已连接模型：'+available.map(m=>m.alias).join('、'):'请先在“设置 → 模型与服务”连接模型。';
+    $('automaticModelStatus').textContent=available.length?'可指定构建模型；生成后的各步骤保留各自的模型配置。':'请先在“设置 → 模型与服务”连接模型。';
     const templates=await api('/v1/studio/templates');$('templates').innerHTML=templates.map((t,i)=>`<button class="template" data-template="${i}"><h3>${escape(t.name)}</h3><p class="muted">${escape(t.description)}</p></button>`).join('');
-    $('templates').querySelectorAll('button').forEach(b=>b.onclick=()=>{epoch++;identifier=null;preferredModel='auto';const t=templates[+b.dataset.template];$('assistantName').value=t.name;$('purpose').value=t.purpose;invalidate();renderStatus({status:'not_built'});});
+    $('templates').querySelectorAll('button').forEach(b=>b.onclick=()=>{epoch++;identifier=null;preferredModel='auto';drawModels();const t=templates[+b.dataset.template];$('assistantName').value=t.name;$('purpose').value=t.purpose;invalidate();renderStatus({status:'not_built'});});
     await list();
   }};
 }

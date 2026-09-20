@@ -91,3 +91,5 @@
   .chat-dag .chat-edge.state-running .chat-edge-flow{stroke-dasharray:none;opacity:.8}
   .chat-node.state-running::after{opacity:.35;transform:none}
 }
+
+.chat-composer-top{flex-wrap:wrap}.chat-composer-top .chat-model-choice{display:flex;align-items:center;gap:6px;font-size:11px;max-width:100%;white-space:nowrap}.chat-model-choice select{max-width:260px}.connection-models .saved-row{flex-wrap:wrap;gap:12px}.connection-models [data-default-model]{max-width:480px}

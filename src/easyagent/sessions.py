@@ -86,6 +86,9 @@ class Conversations:
 
     async def create(self, options, parent=None):
         body = ConversationCreate.model_validate(options)
+        if body.workspace and body.model != 'auto':
+            from .assistant_builder import select_model
+            select_model(self.hub, body.model)
         if not body.workspace:
             self.hub.prepare({
                 "name": body.title,
@@ -110,6 +113,9 @@ class Conversations:
         model = body.model or current["model"]
         if model not in self.hub.models.bindings and not (model == "auto" and current.get("workspace")):
             raise ValueError("unknown model")
+        if current.get('workspace') and model != 'auto':
+            from .assistant_builder import select_model
+            select_model(self.hub, model)
         agent = dict(current["agent"])
         for name in ("instructions", "max_output_tokens"):
             if getattr(body, name) is not None:
@@ -121,6 +127,9 @@ class Conversations:
         with self.store.transaction() as db:
             if db.execute("SELECT active_run FROM conversations WHERE id=?", (identifier,)).fetchone()[0]:
                 raise Conflict("conversation started while configuring")
+            if db.execute("SELECT 1 FROM conversation_turns WHERE conversation=? "
+                          "AND status IN ('queued','starting','running') LIMIT 1", (identifier,)).fetchone():
+                raise Conflict("请先完成或停止待处理消息，再切换模型")
             db.execute(
                 "UPDATE conversations SET title=?,model=?,agent=? WHERE id=?",
                 (body.title or current["title"], model, encode(agent), identifier),
