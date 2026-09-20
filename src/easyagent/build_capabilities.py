@@ -275,7 +275,9 @@ class BuildCapabilities:
                 'Passing these cases does not prove correctness for every possible input.\n')
         package = {'files': {'SKILL.md': text,
                             'references/contracts.json': encode([t.spec.model_dump() for t in code.manifest.tools]),
-                            'references/checks.json': encode(reports)}}
+                            'references/checks.json': encode(reports),
+                            **{'scripts/' + path: content for path, content in code.files.items()}},
+                   'source': {'extension': code.manifest.id, 'revision': str(code.manifest.revision)}}
         try:
             prior = self.hub.skill_packages.get(name)
             if prior['package']['files'] == package['files']:

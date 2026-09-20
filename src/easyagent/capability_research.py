@@ -16,7 +16,8 @@ async def public_url(url):
     parsed = urlsplit(url)
     if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.port not in (None, 443):
         raise ValueError('Public documentation must use HTTPS without credentials')
-    addresses = await asyncio.to_thread(socket.getaddrinfo, parsed.hostname, 443, type=socket.SOCK_STREAM)
+    addresses = await asyncio.wait_for(
+        asyncio.to_thread(socket.getaddrinfo, parsed.hostname, 443, type=socket.SOCK_STREAM), timeout=10)
     if not addresses or any(not ipaddress.ip_address(a[4][0]).is_global for a in addresses):
         raise ValueError('Documentation cannot access private or local addresses')
     return url
