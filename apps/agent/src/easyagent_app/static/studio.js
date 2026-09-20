@@ -126,7 +126,7 @@ import {operationsStudio} from './operations.js?v=20260920-nodes-1';
 operationsStudio({api,escape,flash,showTab,token:()=>token,download});
 import {skillStudio} from './skills.js?v=20260920-nodes-1';
 skillStudio({api,escape,flash,load,showTab,download});
-import {backendSettings} from './backend-settings.js?v=20260920-nodes-1';
+import {backendSettings} from './backend-settings.js?v=20260920-local-1';
 backendSettings({api,escape,flash});
 import {voiceStudio} from './voice.js';
 voiceStudio({api,escape,flash,token:()=>token});

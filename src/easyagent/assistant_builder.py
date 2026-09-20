@@ -106,6 +106,7 @@ def start_build(hub, identifier, assistant):
         "name": assistant["name"],
         "default_model": model,
         "available_tools": catalog,
+        "local_execution": hub.execution.environment(),
         "builtin_media_protocols": [{k: row[k] for k in ('id', 'title', 'path', 'capability', 'protocol', 'description')}
                                     for row in media_definitions().values()],
         "models": [m for m in hub.models.catalog() if m["alias"] != "mock"],
@@ -139,7 +140,14 @@ Use registered tool names and their exact input/output schemas. Never invent API
 When execution_feedback is present, repair the actual failed step using its errors and receipts while preserving the original objective.
 Retain completed external writes exactly; never resubmit successful writes to try again. Do not repeat an unchanged failed plan.
 If backend.terminal is available, you can implement missing local operations as explicit command steps, including scripts and checks;
-use the configured workspace and actual stdout/files as evidence. If backend.browser is available, use its configured sites.
+use local_execution for OS/workspace information and actual stdout/files as evidence. The built-in terminal needs no API key
+or external connection. Use payload.python for portable Python scripts (bundled interpreter), payload.command for shell,
+or payload.argv for executables. Check exit_code and stderr; a command failure is not a successful operation.
+Use attachments.download for public image/file URLs; it persists full original bytes with bounded downloads and public-address checks.
+For images set require_image=true: it actually decodes and returns width/height. attachments.inspect_image verifies existing image
+artifacts; attachments.read alone only returns image metadata. attachments.export_file copies an artifact into the local workspace,
+and attachments.import_file retains a script's output as a durable artifact. Never ask to connect a backend for available built-ins.
+If backend.browser is available, use its configured sites.
 The fact that a task has no saved node is not a reason to stop: compose available operations, write pure code, or research an adapter.
 When a missing node can be implemented as pure data processing, generate code_candidate and a workflow using its tools.
 Use the supplied code_namespace as manifest.id and code_revision as manifest.revision; runtime=javascript, entrypoint=extension.js.

@@ -2,6 +2,8 @@
 
 桌面启动器包含 Python 后端和独立 Agent App，启动后打开系统浏览器访问本机工作室，无需用户安装 Python。窗口关闭不代表后端已停止；Windows 的终端窗口需保持打开。模型与搜索仍需配置自己的服务。
 
+首次启动同时创建 `workspace` 并启用内置终端，支持使用随包 Python 执行脚本、下载公网图片、实际解码核验和持久附件导入导出，无需额外云服务密钥。命令仍经过任务审批；可在执行设置关闭，重启不会覆盖已保存的选择。打包自检会真实运行随包 Python 生成图片，再导入并解码核验。
+
 The desktop launcher bundles Python, the backend and the independent Agent App. It opens Studio in your system browser; users do not need Python installed. Closing the browser does not stop the backend. Keep the Windows console window open while using the app. Configure your own model and search services.
 
 ## GitHub Actions

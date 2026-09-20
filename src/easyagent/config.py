@@ -14,6 +14,8 @@ async def configure(hub, config_path=None):
         return
     path = Path(config_path).resolve()
     config = json.loads(path.read_text(encoding="utf-8"))
+    if "execution" in config:
+        await hub.execution.configure(config["execution"])
     for extension in config.get("extensions", []):
         options = dict(extension)
         options["package"] = json.loads((path.parent / options["package"]).read_text(encoding="utf-8"))

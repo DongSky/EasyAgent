@@ -175,6 +175,8 @@ def main():
         async def serve():
             hub = Hub(args.database)
             await configure(hub, args.config)
+            if args.command in ("studio", "life") and args.host in ("127.0.0.1", "localhost", "::1"):
+                await hub.execution.initialize_local()
             app = create_app(hub, token=token)
             from .studio import install_studio
 

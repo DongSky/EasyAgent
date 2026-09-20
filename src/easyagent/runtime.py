@@ -181,6 +181,8 @@ class Hub:
             unavailable.update({"voice.transcribe", "voice.speak", "backend.media"})
         if "channel" not in bindings:
             unavailable.add("backend.channel")
+        if not settings.terminal_enabled:
+            unavailable.update({"attachments.import_file", "attachments.export_file"})
         return [t for t in rows if t["name"] not in unavailable]
 
     def submit(self, workflow: Workflow | dict, idempotency_key=None, parent=None, parent_job=None):

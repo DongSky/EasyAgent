@@ -113,6 +113,8 @@ For web search, add your own search API key on the same settings page. Model and
 
 ### Recommended APIs to connect
 
+**Local terminal and file handling are built in; no extra API key is needed.** Desktop and loopback Studio create a workspace and enable the terminal on first launch. Agents can run Python scripts or shell commands, import/export durable artifacts, and download public images with actual decoding and dimension checks. Commands still require workflow approval. Saved opt-out settings are preserved; API servers remain opt-in.
+
 Start with these three capabilities to run the complete “keyword search → research and prompt writing → image generation” example. They can come from different services or a single service that supports the required interfaces.
 
 - **Large language model API**: interprets requests, plans workflows, organizes research, and writes prompts. Prefer a model with tool calling and structured JSON output; check for image input support if it needs to understand reference images. In Settings → Models & Services, enter the endpoint, model name, and API key, then select Chat Completions, Responses, or Messages to match the service's actual protocol.

@@ -1,4 +1,4 @@
-"""Optional local browser/terminal services. Host execution requires explicit configuration."""
+"""Local execution, enabled by local App launchers and opt-in for API servers."""
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ import asyncio
 import os
 import json
 import time
+import platform
+import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -13,6 +15,7 @@ from pydantic import Field
 
 from .contracts import Contract
 from .extension_process import terminate
+from .tools import ToolPreparationError
 
 
 class ExecutionSettings(Contract):
@@ -41,6 +44,27 @@ class LocalExecution:
         rows = self.hub.store.memory_search("execution-settings", limit=1)
         return ExecutionSettings.model_validate(rows[0]["value"] if rows else {})
 
+    async def initialize_local(self):
+        """First local App launch only; never override a saved operator choice."""
+        if not self.hub.store.memory_search("execution-settings", limit=1):
+            workspace = Path(self.hub.store.path).resolve().parent / "workspace"
+            workspace.mkdir(parents=True, exist_ok=True)
+            await self.configure({"terminal_enabled": True, "workspace": str(workspace)})
+        return self.settings()
+
+    def environment(self):
+        settings = self.settings()
+        return {
+            "system": platform.system(),
+            "workspace": settings.workspace,
+            "terminal_enabled": settings.terminal_enabled,
+            "terminal_backend": "extension" if self.hub.backends.binding("terminal") else "builtin",
+            "shell": "PowerShell" if os.name == "nt" else "/bin/sh",
+            "python": "payload.python runs a Python script using the bundled interpreter; no system Python needed",
+            "timeout_seconds": settings.timeout_seconds,
+            "permissions": "Commands run as the current OS user after workflow approval; workspace is not an OS sandbox.",
+        }
+
     async def configure(self, body):
         s = ExecutionSettings.model_validate(body)
         if s.terminal_enabled:
@@ -68,30 +92,44 @@ class LocalExecution:
     async def terminal(self, operation, payload, job):
         s = self.settings()
         if not s.terminal_enabled:
-            raise PermissionError("enable local command execution in settings first")
+            raise ToolPreparationError("enable built-in local command execution in settings first; no API key needed")
+        if operation != "execute":
+            raise ToolPreparationError("unsupported terminal operation")
+        if sum(key in payload for key in ("argv", "command", "python")) != 1:
+            raise ToolPreparationError("provide exactly one of argv, command, python")
         argv = payload.get("argv")
+        for key in ("command", "python"):
+            if key in payload and (not isinstance(payload[key], str) or not 1 <= len(payload[key]) <= 16000 or "\x00" in payload[key]):
+                raise ToolPreparationError(key + " must be a nonempty string within 16000 characters")
+        if "command" in payload:
+            argv = (["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", payload["command"]]
+                    if os.name == "nt" else ["/bin/sh", "-c", payload["command"]])
+        if "python" in payload:
+            argv = [sys.executable, "--eah-python" if getattr(sys, "frozen", False) else "-c", payload["python"]]
         if (
             not isinstance(argv, list)
             or not 1 <= len(argv) <= 100
-            or any(not isinstance(a, str) or len(a) > 16000 for a in argv)
+            or any(not isinstance(a, str) or len(a) > 16000 or "\x00" in a for a in argv)
         ):
-            raise ValueError("terminal payload needs argv: an array of executable and arguments")
+            raise ToolPreparationError("terminal payload needs argv: an array of executable and arguments")
+        if not isinstance(payload.get("cwd", "."), str) or "\x00" in payload.get("cwd", "."):
+            raise ToolPreparationError("cwd must be a workspace-relative directory")
         cwd = (Path(s.workspace) / payload.get("cwd", ".")).resolve()
         if not cwd.is_relative_to(Path(s.workspace)) or not cwd.is_dir():
-            raise PermissionError("working directory exceeds configured workspace")
+            raise ToolPreparationError("working directory exceeds configured workspace")
         env = {
             k: v
             for k, v in os.environ.items()
             if k in ("PATH", "SYSTEMROOT", "WINDIR", "LANG", "TEMP", "TMP")
         }
-        process = await asyncio.create_subprocess_exec(
-            *argv,
-            cwd=cwd,
-            env=env,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            start_new_session=os.name != "nt",
-        )
+        env["PYTHONIOENCODING"] = "utf-8"
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *argv, cwd=cwd, env=env, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE, start_new_session=os.name != "nt",
+            )
+        except (OSError, ValueError) as exc:
+            raise ToolPreparationError("command could not start; check executable and working directory") from exc
 
         async def read(stream):
             chunks = []

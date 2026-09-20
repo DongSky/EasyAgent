@@ -144,6 +144,28 @@ class BackendRegistry:
     def register_tools(self):
         fields = {"operation": {"type": "string"}, "payload": {"type": "object"}}
         for kind in ("terminal", "browser", "channel", "media"):
+            description = "Use the configured " + kind + " service. Operations: " + ", ".join(OPERATIONS[kind])
+            payload = {"type": "object"}
+            if kind == "terminal":
+                description = (
+                    "Execute a real command in the built-in local workspace; no external backend or API key needed. "
+                    "operation='execute'; payload contains exactly one of argv (executable + arguments), command "
+                    "(POSIX sh / Windows PowerShell), or python (Python source run with bundled interpreter). "
+                    "Use python for portable file processing. Optional cwd is workspace-relative. "
+                    "Returns exit_code, stdout, stderr, workspace; check exit_code, do not invent success. "
+                    "Commands require workflow approval and run as the OS user, not in a sandbox. "
+                    "Use attachments.export_file to access input artifacts and attachments.import_file to retain "
+                    "output files. Prefer attachments.download for public URLs and attachments.inspect_image for decoding. "
+                    "Explicitly selected extension backends may supply their own payload contract."
+                )
+                # Extensions retain their extensible payload contract; built-in validates the exclusive modes.
+                payload = {"type": "object", "properties": {
+                    "argv": {"type": "array", "minItems": 1, "maxItems": 100,
+                             "items": {"type": "string", "maxLength": 16000}},
+                    "command": {"type": "string", "minLength": 1, "maxLength": 16000},
+                    "python": {"type": "string", "minLength": 1, "maxLength": 16000},
+                    "cwd": {"type": "string", "description": "Directory inside configured workspace; defaults to ."},
+                }}
 
             async def handler(args, ctx, kind=kind):
                 return await self.call(
@@ -153,13 +175,10 @@ class BackendRegistry:
             self.hub.tools.register(
                 ToolSpec(
                     name="backend." + kind,
-                    description="Use the configured "
-                    + kind
-                    + " service. Operations: "
-                    + ", ".join(OPERATIONS[kind]),
+                    description=description,
                     input_schema={
                         "type": "object",
-                        "properties": fields | {"operation": {"enum": OPERATIONS[kind]}},
+                        "properties": fields | {"operation": {"enum": OPERATIONS[kind]}, "payload": payload},
                         "required": ["operation", "payload"],
                         "additionalProperties": False,
                     },

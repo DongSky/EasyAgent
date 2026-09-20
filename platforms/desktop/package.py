@@ -117,7 +117,8 @@ def main():
         checksum = hashlib.file_digest(stream, 'sha256').hexdigest()
     archive.with_suffix('.zip.sha256').write_text(f'{checksum}  {archive.name}\n', encoding='utf-8')
     summary = {'version': version, 'target': target, 'archive': archive.name, 'sha256': checksum,
-               'checks': ['extracted-app', 'pure-js-extension', 'http-health', 'app-assets', 'openapi'],
+               'checks': ['extracted-app', 'pure-js-extension', 'bundled-python', 'image-import-and-decode',
+                          'http-health', 'app-assets', 'openapi'],
                'signing': 'ad-hoc only' if sys.platform == 'darwin' else 'unsigned'}
     (logs / 'smoke-result.json').write_text(json.dumps(summary, indent=2) + '\n', encoding='utf-8')
     print(json.dumps(summary, indent=2))

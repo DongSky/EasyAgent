@@ -30,6 +30,8 @@ class Attachments:
         ), read)
         from .image_preparation import install
         install(hub)
+        from .local_files import install as install_files
+        install_files(hub)
 
     def describe(self, identifier):
         with self.hub.store.connect() as db:

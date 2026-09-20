@@ -15,6 +15,11 @@ def default_data_directory(base):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--eah-python":
+        from easyagent.python_worker import main as python_worker
+
+        python_worker(sys.argv[2])
+        return
     if len(sys.argv) > 1 and sys.argv[1] == "--eah-worker":
         if sys.argv[2] == "wasm":
             from easyagent.wasm_worker import execute
@@ -38,6 +43,7 @@ def main():
         async def smoke():
             with tempfile.TemporaryDirectory() as directory:
                 hub = Hub(Path(directory) / "hub.db", poll_seconds=0.02)
+                await hub.execution.initialize_local()
                 await hub.start()
                 try:
                     package = build_package(
@@ -59,6 +65,21 @@ def main():
                         )
                     )
                     assert r["status"] == "succeeded", r
+                    terminal = await hub.execution.terminal("execute", {"python":
+                        "from PIL import Image; from pathlib import Path; "
+                        "Image.new('RGB', (23, 17), 'blue').save('smoke.png'); print('Python 图片已保存')"
+                    }, None)
+                    assert terminal["exit_code"] == 0, terminal
+                    assert "Python 图片已保存" in terminal["stdout"], terminal
+                    failed = await hub.execution.terminal("execute", {"python": "raise ValueError('smoke-script-error')"}, None)
+                    assert failed["exit_code"] != 0 and "smoke-script-error" in failed["stderr"], failed
+                    media = await hub.wait(hub.submit({"name": "local image", "steps": [
+                        {"id": "imported", "target": "attachments.import_file", "input": {"path": "smoke.png"}},
+                        {"id": "verified", "target": "attachments.inspect_image", "depends_on": ["imported"],
+                         "input": {"artifact_id": {"$ref": "imported.artifact.id"}}},
+                    ]}))
+                    assert media["status"] == "succeeded", media
+                    assert media["steps"][-1]["output"]["image"]["width"] == 23, media
                     app = create_app(hub, manage_workers=False)
                     install_studio(app, hub)
                     mount_app(app)
@@ -68,6 +89,8 @@ def main():
                             {
                                 "packaged_runtime": True,
                                 "pure_extension": r["steps"][0]["output"],
+                                "bundled_python": True,
+                                "image_import_verified": True,
                                 "openapi_paths": len(app.openapi()["paths"]),
                             }
                         )
@@ -87,6 +110,7 @@ def main():
 
     async def serve():
         hub = Hub(root / "hub.db")
+        await hub.execution.initialize_local()
         app = create_app(hub)
         install_studio(app, hub)
         mount_app(app)

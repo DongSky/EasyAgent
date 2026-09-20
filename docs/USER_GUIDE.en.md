@@ -237,7 +237,11 @@ In **Settings → Extensions** (`设置 → 扩展`), import a source package or
 
 Pure JavaScript/WASM extensions perform restricted computation. Python/Node/Rust process extensions require explicit trust in the exact source package and a compatible runtime, and have the host account's privileges. A signature/hash does not establish source safety. The installer does not run arbitrary dependency-install scripts.
 
-Local browser/terminal execution is disabled by default. Configure allowed origins, working directories, and limits before enabling it. Those restrictions are not an OS sandbox.
+Desktop and loopback `easyagent studio` enable the built-in terminal and create a `workspace` directory beside the database on first launch. Saved choices are preserved, including disabling the terminal. API-only servers and remote listeners remain opt-in. Browser automation still requires explicitly configured allowed origins. Commands run as the current OS user after workflow approval; the workspace is not an OS sandbox.
+
+The local terminal accepts executable arguments, shell commands, or Python source using the bundled interpreter. No extra API key is needed. `attachments.download` saves complete public HTTP(S) files (up to 50 MB), validates and pins public addresses across redirects, and decodes images by default. `attachments.export_file` makes an artifact available to scripts; `attachments.import_file` persists generated files; `attachments.inspect_image` decodes single-frame images up to 50 million pixels and returns real dimensions and a digest. Existing files with different contents are never overwritten by export. Image decoding checks file integrity, not semantic image content.
+
+Change the workspace or disable terminal execution under Extensions → Backend services and local execution. To opt out before first launch, pass `--config config.json` containing `{"execution":{"terminal_enabled":false}}`. Public downloads and verification of existing artifacts do not require terminal access. Image decoding is included in the App; SDK-only installations can add `easyagent[media]`.
 
 ## Images, video, and audio
 
