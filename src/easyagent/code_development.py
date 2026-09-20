@@ -99,11 +99,11 @@ class CodeDevelopment:
                 )
                 validate(output, action.spec.output_schema)
                 results.append(
-                    {"tool": scenario["tool"], "passed": output == scenario["expected"], "output": output}
+                    {**scenario, "passed": output == scenario["expected"], "output": output}
                 )
             except Exception as exc:
-                results.append({"tool": scenario["tool"], "passed": False,
-                                "error": type(exc).__name__ + ': ' + str(exc)[:1000]})
+                results.append({**scenario, "passed": False,
+                                "error": type(exc).__name__ + ': ' + str(exc)[-2000:]})
         passed = all(r["passed"] for r in results)
         with self.hub.store.connect() as db:
             db.execute(

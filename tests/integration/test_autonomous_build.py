@@ -23,7 +23,8 @@ class CSVBuilder:
         self.calls = []
 
     async def generate(self, request, model):
-        context = json.loads(request.messages[-1]['content'])
+        context = json.loads(next(m['content'] for m in request.messages
+                                  if m['role'] == 'user' and m['content'].lstrip().startswith('{')))
         self.calls.append(request)
         if request.response_schema['title'] == 'DispatchDecision':
             return ModelResult(data={'action': 'use', 'candidate': context['catalog'][0]['key'],
@@ -64,6 +65,10 @@ async def test_new_node_is_independently_tested_repaired_persisted_and_reused(hu
     plan = build_status(hub, 'csv', body)
     assert plan['status'] == 'ready', plan
     assert [r['passed'] for r in plan['development']] == [False, True]
+    repair = json.loads(model.calls[-1].messages[1]['content'])
+    failed = next(r for r in repair['report']['results'] if not r['passed'])
+    assert failed['input']['csv'] and failed['expected'] == {'totals': {'Alice': 5, 'Bob': 4}}
+    assert failed['output'] == {'totals': {}}
     assert run['usage']['model_calls'] == 3
     assert len(hub.code.list()) == 2
     assert next(c for c in hub.code.list() if c['status'] == 'published')['package']['manifest']['revision'] == 2
@@ -124,6 +129,48 @@ async def test_failed_generated_code_is_never_published(hub):
     assert len(hub.code.list()) == 3
     assert all(c['status'] == 'failed' for c in hub.code.list())
     assert not hub.extensions.active and not hub.skill_packages.list()
+
+
+async def test_invalid_test_generation_retries_tests_before_changing_code(hub):
+    class ExcessChecks(CSVBuilder):
+        check_calls = 0
+
+        async def generate(self, request, model):
+            result = await super().generate(request, model)
+            if request.response_schema['title'] == 'IndependentChecks':
+                self.check_calls += 1
+                if self.check_calls == 1:
+                    result.data['scenarios'] *= 7
+            return result
+    model = ExcessChecks()
+    hub.models.register('planner', model, 'fixture', ['decision'])
+    body = assistant('Aggregate CSV by customer.')
+    run = await hub.wait(start_build(hub, 'checks', body)['id'])
+    assert run['status'] == 'succeeded', run
+    plan = build_status(hub, 'checks', body)
+    assert plan['status'] == 'ready', plan
+    assert model.check_calls == 2
+    assert [r['passed'] for r in plan['development']] == [False, True]
+
+
+async def test_repair_can_correct_pure_code_effect_without_changing_interfaces(hub):
+    class WrongEffect(CSVBuilder):
+        async def generate(self, request, model):
+            result = await super().generate(request, model)
+            if code := result.data.get('code_candidate'):
+                if code['manifest']['revision'] == 1:
+                    code['manifest']['tools'][0]['spec']['effect'] = 'local'
+            return result
+    model = WrongEffect()
+    hub.models.register('planner', model, 'fixture', ['decision'])
+    body = assistant('Aggregate CSV by customer.')
+    run = await hub.wait(start_build(hub, 'effects', body)['id'])
+    assert run['status'] == 'succeeded', run
+    plan = build_status(hub, 'effects', body)
+    assert plan['status'] == 'ready', plan
+    assert [(r['attempt'], r['passed']) for r in plan['development']] == [(2, True)]
+    assert hub.tools.entries[model.namespace + '.aggregate'][0].effect == 'read'
+    assert sum(r.response_schema['title'] == 'IndependentChecks' for r in model.calls) == 1
 
 
 async def test_chat_repairs_actual_failure_without_repeating_completed_write(api):

@@ -618,10 +618,13 @@ class ExtensionHost:
                     process.stdin.write((encode(payload) + "\n").encode())
                     await process.stdin.drain()
                     process.stdin.close()
-                    output, _ = await asyncio.gather(*readers)
+                    output, stderr = await asyncio.gather(*readers)
                     await process.wait()
                 if process.returncode:
-                    raise ValueError(f"extension {m.id} handler failed (exit {process.returncode})")
+                    # Pure workers have no credentials or host access. Their bounded traceback
+                    # gives generated-code repair the actual syntax/runtime error.
+                    detail = ': ' + stderr.decode('utf-8', errors='replace')[-2000:] if m.runtime in ('javascript', 'wasm') else ''
+                    raise ValueError(f"extension {m.id} handler failed (exit {process.returncode})" + detail)
                 response = json.loads(output)
             from .extension_contracts import ExtensionResponse
 

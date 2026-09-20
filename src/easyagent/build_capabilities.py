@@ -104,11 +104,19 @@ class BuildCapabilities:
         self.hub.store.checkpoint(ctx.job, state)
 
     async def ask(self, ctx, model, schema, instruction, content, tokens=8192):
-        result = await self.hub.generate(ctx.job, ModelRequest(model=model, capability='decision',
-            max_output_tokens=tokens, response_schema=schema,
-            messages=[{'role': 'system', 'content': instruction},
-                      {'role': 'user', 'content': encode(content)}]))
-        return result.data
+        messages = [{'role': 'system', 'content': instruction}, {'role': 'user', 'content': encode(content)}]
+        for attempt in range(2):
+            try:
+                result = await self.hub.generate(ctx.job, ModelRequest(model=model, capability='decision',
+                    max_output_tokens=tokens, response_schema=schema, messages=messages))
+                return result.data
+            except ValidationError as exc:
+                if attempt:
+                    raise
+                messages.append({'role': 'user', 'content':
+                    'Your previous response failed the required JSON schema. Return a complete corrected object, '
+                    'without additional fields. Constraint: ' + str(exc.validator) + '=' + str(exc.validator_value)
+                    + '; path=' + '.'.join(map(str, exc.absolute_path))})
 
     async def verify(self, args, ctx):
         from .assistant_builder import BuildDraft, code_namespace, stored, validate_compiled
@@ -158,6 +166,8 @@ class BuildCapabilities:
                     checks = await self.ask(ctx, args['model'], IndependentChecks.model_json_schema(),
                         'Write independent executable input/expected tests from the requirement and tool schemas. '
                         'Cover every tool, normal and boundary inputs. Expected results must follow the requirement. '
+                        'Use 2 to 4 VALID input cases per tool, at most 12 total. Each case has ONLY tool, input, expected. '
+                        'expected is the exact output JSON, not a description, assertion or expected error. '
                         'Do not weaken tests to fit an implementation. Pure deterministic processing only.',
                         {'requirement': args['assistant']['purpose'], 'tools': [t.spec.model_dump() for t in code.manifest.tools]}, 4096)
                     checks = IndependentChecks.model_validate(checks)
@@ -165,7 +175,9 @@ class BuildCapabilities:
                             or any(sum(s.tool == n for s in checks.scenarios) < 2 for n in names)):
                         raise ValueError('independent tests must cover normal and boundary inputs for each new node')
                     self.checkpoint(ctx, state, checks=checks.model_dump(), contracts=[t.spec.model_dump() for t in code.manifest.tools])
-                if [t.spec.model_dump() for t in code.manifest.tools] != state['contracts']:
+                def interfaces(tools):
+                    return [{k: t[k] for k in ('name', 'input_schema', 'output_schema')} for t in tools]
+                if interfaces([t.spec.model_dump() for t in code.manifest.tools]) != interfaces(state['contracts']):
                     raise ValueError('repair must preserve the independently tested tool contracts')
                 candidate = self.hub.code.propose(code.model_copy(update={
                     'scenarios': [*code.scenarios, *IndependentChecks.model_validate(state['checks']).scenarios]}))
@@ -193,6 +205,7 @@ class BuildCapabilities:
                 self.save_nodes(code)
                 return {'draft': draft.model_dump(), 'tools': [*created, *names], 'development': state['development']}
             except (ValueError, KeyError, PermissionError, ValidationError, SchemaError) as exc:
+                self.checkpoint(ctx, state, last_error=type(exc).__name__ + ': ' + str(exc)[:1500])
                 if state['attempt'] >= 2:
                     return {'draft': draft.model_dump(), 'tools': [], 'development': state['development'],
                             'errors': ['自动开发未通过验证：' + str(exc)[:1000]]}
@@ -200,9 +213,11 @@ class BuildCapabilities:
                 repaired = await self.ask(ctx, args['model'], BuildDraft.model_json_schema(),
                     'Repair the generated code and workflow using actual test failures. Preserve tool contracts and expected behavior. '
                     'Never change independent tests, request permissions, fabricate services or replace computation with hardcoded examples. '
+                    'Pure JavaScript tools must use spec.effect=read, idempotent=true and zero host permissions. '
                     'Return the complete draft; use the given namespace and revision. Keep the original requirement.',
                     {'requirement': args['assistant']['purpose'], 'draft': draft.model_dump(), 'error': str(exc)[:1500],
-                     'report': report, 'code_namespace': namespace, 'revision': revision})
+                     'report': report, 'tested_contracts': state.get('contracts', []),
+                     'code_namespace': namespace, 'revision': revision})
                 self.checkpoint(ctx, state, draft=repaired, attempt=state['attempt'] + 1)
         raise RuntimeError('node development budget exhausted')
 

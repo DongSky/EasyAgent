@@ -98,7 +98,8 @@ use the configured workspace and actual stdout/files as evidence. If backend.bro
 The fact that a task has no saved node is not a reason to stop: compose available operations, write pure code, or research an adapter.
 When a missing node can be implemented as pure data processing, generate code_candidate and a workflow using its tools.
 Use the supplied code_namespace as manifest.id, revision=1, runtime=javascript, entrypoint=extension.js.
-Each tool name starts with code_namespace+'.'. Give exact input/output JSON Schemas and a useful description.
+Each tool name starts with code_namespace+'.'; set spec.effect='read' and spec.idempotent=true for pure computation.
+Give exact input/output JSON Schemas and a useful description.
 Implement global handle(request), dispatching request.method to the tool handler and reading request.params;
 return {result: output}. lifecycle.* returns {result:{}}. No imports, files, network, host services or permissions.
 Include executable scenarios (tool,input,expected) covering ordinary and boundary cases. The runtime will independently
