@@ -30,6 +30,39 @@ async def test_foreach_subworkflow_approval_and_parent_budget(hub):
     assert hub.store.run(limited)["usage"]["model_calls"] == 1
 
 
+async def test_foreach_preserves_explicit_shared_inputs_and_defaults_across_restart(hub):
+    from easyagent.runtime import Hub
+    body = {'name': '单张图片', 'inputs': {'quality': 'medium', 'edit_prompt': 'default'}, 'steps': [
+        {'id': 'edit', 'target': 'core.echo', 'requires_approval': True, 'input': {
+            'image': {'$ref': '$input.item'}, 'prompt': {'$ref': '$input.edit_prompt'},
+            'index': {'$ref': '$input.index'}, 'quality': {'$ref': '$input.quality'}}}]}
+    identifier = hub.submit({'name': '批量修图参数', 'inputs': {'private': 'not inherited'}, 'steps': [
+        {'id': 'prepare_prompt', 'kind': 'transform', 'input': {'text': '自然重打光、保留纹理'}},
+        {'id': 'retouch', 'kind': 'foreach', 'depends_on': ['prepare_prompt'], 'input': {
+            'items': ['original-one', 'original-two'], 'edit_prompt': {'$ref': 'prepare_prompt.text'},
+            'item': 'must not override the image', 'index': 99}, 'body': body}]})
+    async with asyncio.timeout(5):
+        while len(hub.store.run(identifier)['approvals']) < 2:
+            await asyncio.sleep(.01)
+    await hub.stop()
+    restored = Hub(hub.store.path, poll_seconds=.01)
+    for approval in restored.store.run(identifier)['approvals']:
+        restored.tools.approve(restored.store, approval['id'], True)
+    await restored.start()
+    try:
+        run = await restored.wait(identifier)
+        assert run['status'] == 'succeeded', run
+        results = run['steps'][1]['output']['results']
+        assert [r['edit'] for r in results] == [
+            {'image': image, 'prompt': '自然重打光、保留纹理', 'index': index, 'quality': 'medium'}
+            for index, image in enumerate(['original-one', 'original-two'])]
+        assert len(run['children']) == 2 and run['usage']['tool_calls'] == 2
+        for child in run['children']:
+            assert 'private' not in restored.store.run(child['id'])['spec']['inputs']
+    finally:
+        await restored.stop()
+
+
 async def test_knowledge_to_agent_artifact_and_trace(api):
     url, hub = api
     async with httpx.AsyncClient(base_url=url) as client:

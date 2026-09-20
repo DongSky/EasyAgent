@@ -54,6 +54,46 @@ def document_flow():
                       {'id': 'save', 'kind': 'artifact', 'depends_on': ['read'], 'input': {'name': '通知.txt', 'content': {'$ref': 'read.text'}}}]}
 
 
+async def test_router_sees_nested_pinned_tools_and_shared_input_wiring(api):
+    url, hub = api
+    body = {'name': 'process one', 'steps': [{'id': 'copy', 'target': 'core.echo',
+        'input': {'file': {'$ref': '$input.item'}, 'prompt': {'$ref': '$input.edit_prompt'}}}]}
+    hub.development.save_workflow('process-one', body)
+    flow = {'name': '批量处理', 'steps': [{'id': 'batch', 'kind': 'foreach',
+        'input': {'items': {'$ref': '$input.attachment_ids'}, 'edit_prompt': {'$ref': '$input.message'}},
+        'workflow_ref': {'id': 'process-one', 'revision': 1}}]}
+    hub.development.save_workflow('batch', flow)
+    hub.development.save_workflow('process-one', {'name': 'changed', 'steps': [
+        {'id': 'different', 'kind': 'transform'}]}, 1)
+    artifact = hub.artifacts.put('original.txt', b'original bytes', 'text/plain')
+
+    async def route(context):
+        candidate = context['catalog'][0]
+        assert candidate['key'] == 'batch@1'
+        batch = candidate['steps'][0]
+        assert batch['input']['edit_prompt'] == {'$ref': '$input.message'}
+        inner = batch['children'][0]
+        assert inner['id'] == 'copy' and inner['target'] == 'core.echo'
+        assert inner['input']['prompt'] == {'$ref': '$input.edit_prompt'}
+        assert inner['description'] == hub.tools.spec('core.echo').description
+        return {'action': 'use', 'candidate': candidate['key'], 'confidence': 1,
+                'inputs': {}, 'message': '使用已配置的子流程节点。'}
+
+    remote, calls = provider_app(route)
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+        hub.models.register('router', HTTPProvider(endpoint), 'fixture', ['decision'])
+        conversation = (await client.post('/v1/conversations', json={'workspace': True, 'model': 'router'})).json()
+        response = await client.post(f"/v1/conversations/{conversation['id']}/messages", json={
+            'text': '保持自然', 'attachments': [artifact['id']], 'intent': 'workflow', 'workflow': 'batch@1'})
+        assert response.status_code == 202
+        completed = await settled(hub, conversation['id'])
+        task = completed['turns'][-1]['task']
+        assert task['phase'] == 'completed', task
+        result = hub.store.run(task['run_id'])['steps'][0]['output']['results'][0]['copy']
+        assert result == {'file': artifact['id'], 'prompt': '保持自然'}
+        assert len(calls) == 1
+
+
 async def test_match_attachments_pinned_version_idempotency_and_restore(api):
     url, hub = api
     first = hub.development.save_workflow('notice', document_flow())

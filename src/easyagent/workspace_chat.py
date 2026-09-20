@@ -53,6 +53,23 @@ def input_contract(flow):
     return {'type': 'object', 'properties': {n: {} for n in sorted(names)}, 'required': sorted(required), 'additionalProperties': False}
 
 
+def routing_steps(hub, flow):
+    """Expose the actual frozen child operations, including their data wiring."""
+    def describe(workflow):
+        result = []
+        for step in workflow['steps']:
+            item = {k: step[k] for k in ('id', 'kind', 'target', 'depends_on', 'input')}
+            item['title'] = workflow.get('metadata', {}).get('step_labels', {}).get(step['id'], step['id'])
+            if step['kind'] == 'tool':
+                spec = hub.tools.spec(step['target'], step.get('tool_revision'))
+                item['description'] = spec.description[:1500]
+            if step.get('body'):
+                item['children'] = describe(step['body'])
+            result.append(item)
+        return result
+    return describe(hub.prepare(flow).model_dump())
+
+
 class WorkspaceChat:
     def __init__(self, hub):
         self.hub, self.store = hub, hub.store
@@ -225,7 +242,8 @@ class WorkspaceChat:
             state['phase'] = 'clarification'
             return self.finish(turn, state, 'succeeded', '可用流程较多，请在输入框上方先选择一个流程，或选择“创建新流程”。')
         state['candidates'] = candidates
-        catalog = [{k: v for k, v in c.items() if k != 'workflow'} | {'steps': [{'kind': s['kind'], 'target': s.get('target'), 'title': c['workflow'].get('metadata', {}).get('step_labels', {}).get(s['id'], s['id'])} for s in c['workflow']['steps']]} for c in candidates]
+        catalog = [{k: v for k, v in c.items() if k != 'workflow'} |
+                   {'steps': routing_steps(self.hub, c['workflow'])} for c in candidates]
         material = []
         for a in state['attachments']:
             item = {k: a[k] for k in ('id', 'name', 'kind', 'media_type', 'size')}
@@ -245,6 +263,9 @@ All relevant attachments must be handled by real steps, not just mentioned in th
 If the request needs new processing and no workflow fits, choose create. For conversation or factual explanation without actions choose reply; never claim external actions completed.
 For ambiguous intent, unclear requirements, or missing mandatory fields, choose clarify with a specific question and up to four catalog candidate keys.
 If selected_workflow is supplied, use that exact candidate or clarify its missing inputs; do not create a different workflow.
+Inspect children inside foreach/subworkflow steps: they expose the actual validated tool calls and input wiring.
+Do not ask users to supply schemas or prove a tool exists when those operations are already present in the candidate.
+Only request missing business inputs; missing runtime access will be reported by connection or execution validation.
 Input message is injected from the current user material, attachment_ids contains the uploaded IDs, attachments contains file descriptors.
 Map a file into a named input such as reference_artifact only using its actual uploaded ID. Never pretend you have seen media content from filenames.
 Respond in the user's language. title is only used if creating a new workflow. For intent=chat answer conversationally without choosing or creating a workflow.'''

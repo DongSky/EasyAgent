@@ -899,7 +899,8 @@ class Hub:
                     raise ValueError("subworkflow nesting exceeds 8 levels")
             for index, item in enumerate(items):
                 child = Workflow.model_validate(spec.body).model_copy(deep=True)
-                child.inputs.update({"item": item, "index": index} if spec.kind == "foreach" else item)
+                child.inputs.update({**{k: v for k, v in arguments.items() if k != "items"},
+                                     "item": item, "index": index} if spec.kind == "foreach" else item)
                 self.submit(
                     child, f"child:{job['run_id']}:{job['id']}:{index}", (job["run_id"], job["id"], index)
                 )

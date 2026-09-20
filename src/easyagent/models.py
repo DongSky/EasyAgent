@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import httpx
-from jsonschema import validate
+from jsonschema import ValidationError, validate
 
 from .contracts import ModelRequest, ModelResult, ToolCall
 
@@ -54,9 +54,15 @@ class ModelRegistry:
             request = self.attachment_loader(request, binding)
         result = await binding.provider.generate(request, binding.model)
         if request.response_schema and not result.tool_calls:
-            if result.data is None:
-                result.data = json.loads(result.text)
-            validate(result.data, request.response_schema)
+            try:
+                if result.data is None:
+                    result.data = json.loads(result.text)
+                validate(result.data, request.response_schema)
+            except (ValidationError, json.JSONDecodeError) as exc:
+                # Keep the invalid draft available to bounded compiler repair, not as
+                # a successful result or a raw payload in ordinary error messages.
+                exc.model_response = result
+                raise
         return result
 
     def catalog(self):

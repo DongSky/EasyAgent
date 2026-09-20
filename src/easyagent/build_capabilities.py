@@ -5,7 +5,7 @@ import hashlib
 import json
 from urllib.parse import urlsplit
 
-from pydantic import Field
+from pydantic import Field, ValidationError as ContractError
 from jsonschema import ValidationError, SchemaError, validate
 
 from .code_development import CodeScenario
@@ -99,27 +99,64 @@ class BuildCapabilities:
             description='Internal task compiler: validate, test and repair missing pure-code nodes.',
             effect='local', idempotent=True), self.verify)
         hub.tools.internal_names.add('development.verify_build')
+        hub.tools.register(ToolSpec(name='development.compile_build',
+            description='Internal task planner with bounded structured-output repair.',
+            effect='local', idempotent=True), self.compile)
+        hub.tools.internal_names.add('development.compile_build')
 
     def checkpoint(self, ctx, state, **updates):
         state.update(updates)
         self.hub.store.checkpoint(ctx.job, state)
 
-    async def ask(self, ctx, model, schema, instruction, content, tokens=8192, check=None):
-        messages = [{'role': 'system', 'content': instruction}, {'role': 'user', 'content': encode(content)}]
-        for attempt in range(2):
+    async def ask(self, ctx, model, schema, instruction, content, tokens=8192, check=None,
+                  *, attempts=2, repair_state=None):
+        messages = (repair_state or {}).get('messages') or [
+            {'role': 'system', 'content': instruction}, {'role': 'user', 'content': encode(content)}]
+        for attempt in range((repair_state or {}).get('attempt', 0), attempts):
+            result = None
             try:
                 result = await self.hub.generate(ctx.job, ModelRequest(model=model, capability='decision',
                     max_output_tokens=tokens, response_schema=schema, messages=messages))
                 if check:
                     check(result.data)
                 return result.data
-            except ValidationError as exc:
-                if attempt:
-                    raise
+            except (ValidationError, ContractError, json.JSONDecodeError) as exc:
+                if isinstance(exc, ValidationError):
+                    detail = ('path=' + '.'.join(map(str, exc.absolute_path)) + '; constraint='
+                              + str(exc.validator) + '=' + str(exc.validator_value)[:400])
+                elif isinstance(exc, ContractError):
+                    detail = '; '.join('.'.join(map(str, e['loc'])) + ': ' + e['msg']
+                                       for e in exc.errors(include_input=False, include_url=False))[:1000]
+                else:
+                    detail = f'Invalid JSON at line {exc.lineno}, column {exc.colno}'
+                response = getattr(exc, 'model_response', None) or result
+                if response:
+                    messages.append({'role': 'assistant', 'content':
+                                     encode(response.data) if response.data is not None else response.text})
                 messages.append({'role': 'user', 'content':
-                    'Your previous response failed the required JSON schema. Return a complete corrected object, '
-                    'without additional fields. Constraint: ' + str(exc.validator) + '=' + str(exc.validator_value)
-                    + '; path=' + '.'.join(map(str, exc.absolute_path)) + '; detail=' + exc.message[:600]})
+                    'Your previous response failed validation. Return a complete corrected object preserving the original '
+                    'task, dependencies and completed writes. Follow the required JSON schema; do not enlarge limits. ' + detail})
+                if repair_state is not None:
+                    self.checkpoint(ctx, repair_state, messages=messages, attempt=attempt + 1, last_error=detail)
+                with self.hub.store.transaction() as db:
+                    self.hub.store.event(db, ctx.run_id, 'build.validation_failed',
+                                         {'step': ctx.step_id, 'attempt': attempt + 1, 'constraint': detail})
+                if attempt + 1 == attempts:
+                    raise ValueError(f'规划输出经过 {attempts} 次校验仍未通过：{detail}') from exc
+        raise ValueError('规划输出纠错次数已用完，请查看校验记录')
+
+    async def compile(self, args, ctx):
+        from .assistant_builder import BuildDraft
+        if (not ctx.job or self.hub.store.run(ctx.run_id)['spec']['metadata'].get('assistant_builder')
+                != args['assistant_id']):
+            raise PermissionError('compilation belongs to a task build')
+        state = ctx.job['state'] or {}
+        if 'draft' not in state:
+            draft = await self.ask(ctx, args['model'], BuildDraft.model_json_schema(),
+                args['messages'][0]['content'], json.loads(args['messages'][1]['content']),
+                args['max_output_tokens'], check=BuildDraft.model_validate, attempts=3, repair_state=state)
+            self.checkpoint(ctx, state, draft=draft)
+        return {'data': state['draft']}
 
     async def verify(self, args, ctx):
         from .assistant_builder import BuildDraft, code_namespace, stored, validate_compiled
@@ -141,7 +178,8 @@ class BuildCapabilities:
             content['research_evidence'] = state['evidence']
             proposal = await self.ask(ctx, args['model'], BuildDraft.model_json_schema(),
                 original[0]['content'] + '\nResearch is complete for this attempt. Use the actual evidence; do not request another search. '
-                'If access is missing, name the service and the specific login/key required, not tool schemas.', content)
+                'If access is missing, name the service and the specific login/key required, not tool schemas.', content,
+                check=BuildDraft.model_validate)
             self.checkpoint(ctx, state, draft=proposal, research_compiled=True)
             draft = BuildDraft.model_validate(proposal)
         if draft.required_connections:
@@ -151,7 +189,7 @@ class BuildCapabilities:
                     'with id, title, description, depends_on, requires (requirement IDs). Preserve branches and joins. '
                     'This is a non-executable plan: do not invent tool schemas or claim unavailable services are connected. '
                     'Return the full draft with workflow=null and at least one planned step.',
-                    {'requirement': args['assistant']['purpose'], 'draft': draft.model_dump()})
+                    {'requirement': args['assistant']['purpose'], 'draft': draft.model_dump()}, check=BuildDraft.model_validate)
                 draft = BuildDraft.model_validate(proposal)
                 if not draft.required_connections or not draft.planned_steps:
                     return {'draft': draft.model_dump(), 'errors': ['待接入草稿未保留能力清单或计划步骤，请重试构建。']}
@@ -251,7 +289,7 @@ class BuildCapabilities:
                     'Return the complete draft; use the given namespace and revision. Keep the original requirement.',
                     {'requirement': args['assistant']['purpose'], 'draft': draft.model_dump(), 'error': str(exc)[:1500],
                      'report': report, 'tested_contracts': state.get('contracts', []),
-                     'code_namespace': namespace, 'revision': revision})
+                     'code_namespace': namespace, 'revision': revision}, check=BuildDraft.model_validate)
                 self.checkpoint(ctx, state, draft=repaired, attempt=state['attempt'] + 1)
         raise RuntimeError('node development budget exhausted')
 
