@@ -125,6 +125,8 @@ class BuildCapabilities:
         state = ctx.job['state'] or {'draft': args['draft'], 'attempt': 0, 'development': []}
         draft = BuildDraft.model_validate(state['draft'])
         namespace = code_namespace(args['assistant_id'], args['assistant'])
+        build = stored(self.hub, 'studio-assistant-builds', args['assistant_id'])
+        first_revision = build.get('code_revision', 1)
         if draft.research_queries and not state.get('researched'):
             from .capability_research import research
             evidence = await research(self.hub, ctx, draft.research_queries)
@@ -156,7 +158,7 @@ class BuildCapabilities:
             code = draft.code_candidate
             report = None
             try:
-                if not code or code.manifest.id != namespace or code.manifest.revision != state['attempt'] + 1:
+                if not code or code.manifest.id != namespace or code.manifest.revision != first_revision + state['attempt']:
                     raise ValueError('code must use the supplied namespace and attempt revision')
                 if draft.workflow is None or draft.questions:
                     raise ValueError('generated code needs a complete workflow for the original task')
@@ -189,9 +191,12 @@ class BuildCapabilities:
                 build = stored(self.hub, 'studio-assistant-builds', args['assistant_id'])
                 # Validate the complete graph before publication. This synchronous overlay cannot execute code.
                 prior = {name: self.hub.tools.entries.get(name) for name in names}
+                keys = [(name, code.manifest.revision) for name in names]
+                prior_versions = {key: self.hub.tools.versions.get(key) for key in keys}
                 try:
                     for tool in code.manifest.tools:
                         self.hub.tools.entries[tool.spec.name] = (tool.spec, None)
+                        self.hub.tools.versions[tool.spec.name, code.manifest.revision] = (tool.spec, None)
                     validate_compiled(self.hub, draft.workflow, {**build, 'tools': [*build['tools'], *created, *names]})
                 finally:
                     for name, entry in prior.items():
@@ -199,6 +204,11 @@ class BuildCapabilities:
                             self.hub.tools.entries.pop(name, None)
                         else:
                             self.hub.tools.entries[name] = entry
+                    for key, entry in prior_versions.items():
+                        if entry is None:
+                            self.hub.tools.versions.pop(key, None)
+                        else:
+                            self.hub.tools.versions[key] = entry
                 # Only restricted JS/WASM tools with zero host permissions reach publication.
                 await self.hub.code.publish(candidate['id'])
                 self.save_skill(args, namespace, code, state['development'])
@@ -209,7 +219,7 @@ class BuildCapabilities:
                 if state['attempt'] >= 2:
                     return {'draft': draft.model_dump(), 'tools': [], 'development': state['development'],
                             'errors': ['自动开发未通过验证：' + str(exc)[:1000]]}
-                revision = state['attempt'] + 2
+                revision = first_revision + state['attempt'] + 1
                 repaired = await self.ask(ctx, args['model'], BuildDraft.model_json_schema(),
                     'Repair the generated code and workflow using actual test failures. Preserve tool contracts and expected behavior. '
                     'Never change independent tests, request permissions, fabricate services or replace computation with hardcoded examples. '

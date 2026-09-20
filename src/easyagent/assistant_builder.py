@@ -66,6 +66,8 @@ def start_build(hub, identifier, assistant):
         if not tool["name"].startswith(("development.", "code.", "agents.", "skills.save"))
     ]
     namespace_list = sorted({d["namespace"] for d in hub.knowledge.list()})
+    namespace = code_namespace(identifier, assistant)
+    code_revision = 1 + max((revision for name, revision in hub.extensions.packages if name == namespace), default=0)
     context = {
         "requirement": assistant["purpose"],
         "name": assistant["name"],
@@ -78,7 +80,8 @@ def start_build(hub, identifier, assistant):
                           "attachment_ids": "Array of local artifact IDs uploaded for this run",
                           "attachments": "Array of file metadata: id, name, kind, media_type, size"},
         "current_workflow": (stored(hub, "studio-assistant-plans", identifier) or {}).get("workflow"),
-        "code_namespace": code_namespace(identifier, assistant),
+        "code_namespace": namespace,
+        "code_revision": code_revision,
         "connected_services": [
             {'alias': alias, 'base_url': b.provider.base_url, 'model': b.model}
             for alias, b in hub.models.bindings.items() if hasattr(b.provider, 'base_url')
@@ -97,7 +100,7 @@ If backend.terminal is available, you can implement missing local operations as 
 use the configured workspace and actual stdout/files as evidence. If backend.browser is available, use its configured sites.
 The fact that a task has no saved node is not a reason to stop: compose available operations, write pure code, or research an adapter.
 When a missing node can be implemented as pure data processing, generate code_candidate and a workflow using its tools.
-Use the supplied code_namespace as manifest.id, revision=1, runtime=javascript, entrypoint=extension.js.
+Use the supplied code_namespace as manifest.id and code_revision as manifest.revision; runtime=javascript, entrypoint=extension.js.
 Each tool name starts with code_namespace+'.'; set spec.effect='read' and spec.idempotent=true for pure computation.
 Give exact input/output JSON Schemas and a useful description.
 Implement global handle(request), dispatching request.method to the tool handler and reading request.params;
@@ -184,6 +187,7 @@ multi-stage requests must expose their actual stages. Include a final useful res
             "skills": [s["name"] for s in context["skills"]],
             "knowledge": namespace_list,
             "model": model,
+            "code_revision": code_revision,
         },
         "assistant-builder",
     )

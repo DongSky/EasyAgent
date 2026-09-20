@@ -38,7 +38,7 @@ class CSVBuilder:
                 {'tool': name, 'input': {'csv': 'customer,amount'}, 'expected': {'totals': {}}}]})
         self.namespace = context['code_namespace']
         name = self.namespace + '.aggregate'
-        revision = context.get('revision', 1)
+        revision = context.get('revision', context.get('code_revision', 1))
         source = ('function handle(r) {if(r.method.startsWith("lifecycle."))return {result:{}};'
                   'const totals={};for(const line of r.params.csv.split("\\n").slice(1)){'
                   'if(!line.trim())continue;const [name,amount]=line.split(",");'
@@ -52,7 +52,8 @@ class CSVBuilder:
                 'files': {'extension.js': source},
                 'scenarios': [{'tool': name, 'input': {'csv': 'customer,amount'}, 'expected': {'totals': {}}}]}
         return ModelResult(data={'workflow': {'name': 'CSV 汇总', 'steps': [
-            {'id': 'aggregate', 'target': name, 'input': {'csv': {'$ref': '$input.message'}}}]},
+            {'id': 'aggregate', 'target': name, 'tool_revision': revision,
+             'input': {'csv': {'$ref': '$input.message'}}}]},
             'explanation': '创建节点、验证边界输入，再汇总 CSV。', 'questions': [], 'code_candidate': code})
 
 
@@ -87,6 +88,23 @@ async def test_new_node_is_independently_tested_repaired_persisted_and_reused(hu
         assert len(model.calls) == 3
     finally:
         await restored.stop()
+
+
+async def test_rebuild_publishes_new_revision_without_mutating_saved_consumers(hub):
+    model = CSVBuilder()
+    hub.models.register('planner', model, 'fixture', ['decision'])
+    body = assistant('Aggregate CSV by customer.')
+    await hub.wait(start_build(hub, 'rebuild', body)['id'])
+    original = build_status(hub, 'rebuild', body)
+    assert original['workflow']['steps'][0]['tool_revision'] == 2
+    await hub.wait(start_build(hub, 'rebuild', body)['id'])
+    rebuilt = build_status(hub, 'rebuild', body)
+    assert rebuilt['status'] == 'ready', rebuilt
+    assert rebuilt['workflow']['steps'][0]['tool_revision'] == 3
+    assert original['workflow']['steps'][0]['tool_revision'] == 2
+    run = await hub.wait(hub.submit(original['workflow'] | {'inputs': {'message': 'customer,amount\nAlice,4'}}))
+    assert run['status'] == 'succeeded'
+    assert run['steps'][0]['output'] == {'totals': {'Alice': 4}}
 
 
 async def test_chat_creates_missing_node_finishes_task_and_reuses_it(api):
