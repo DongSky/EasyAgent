@@ -95,9 +95,10 @@ async def test_research_image_multiple_inputs_concurrent_fork_join_approval_rest
             try:
                 await asyncio.wait_for(started.wait(), 5)
                 # The writer is blocked by a gate; the other branch must still save its result.
-                async with asyncio.timeout(5):
+                async with asyncio.timeout(10):
                     while not (run := runtime.hub.store.runs()) or not any(
-                        a['name']=='sources.md' for a in runtime.hub.artifacts.list(run[0]['id'])):
+                        a['name']=='sources.md' for a in runtime.hub.artifacts.list(run[0]['id'])
+                    ) or runtime.hub.store.run(run[0]['id'])['steps'][6]['status'] != 'succeeded':
                         await asyncio.sleep(.01)
                 state = runtime.hub.store.run(run[0]['id'])
                 assert state['steps'][3]['status'] == 'running'

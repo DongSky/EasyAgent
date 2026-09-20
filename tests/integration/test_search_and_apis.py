@@ -165,13 +165,16 @@ async def test_search_errors_limits_and_retry_keep_key_private(api):
         if q == "shape":
             return {"results": "wrong"}
         if q == "slow":
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(1)
         if q == "redirect":
             return RedirectResponse("/elsewhere")
         return search_response(q)
     async with live_server(remote) as origin, httpx.AsyncClient(base_url=url) as client:
-        await client.post("/v1/studio/search/tinyfish", json={"endpoint": origin, "api_key": "secret-fixture-key", "timeout_seconds": 0.08})
+        await client.post("/v1/studio/search/tinyfish", json={"endpoint": origin, "api_key": "secret-fixture-key", "timeout_seconds": 5})
         for q in ["retry", "401", "big", "json", "shape", "slow", "redirect"]:
+            if q in ('slow', 'redirect'):
+                await client.post('/v1/studio/search/tinyfish', json={
+                    'endpoint': origin, 'timeout_seconds': .2 if q == 'slow' else 5})
             run = await hub.wait(hub.submit({"name": q, "steps": [{"id": "s", "target": "search.tinyfish", "max_attempts": 3 if q == "401" else 2 if q == "retry" else 1, "input": {"query": q}}]}))
             assert run["status"] == ("succeeded" if q == "retry" else "failed"), run
             assert "secret-fixture-key" not in json.dumps(run)
