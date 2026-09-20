@@ -12,7 +12,7 @@ async function api(path,method='GET',body){const r=await fetch(path,{method,head
 function guard(fn){return async e=>{try{await fn(e)}catch(err){flash(err.message)}}}
 document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=guard(async()=>{showTab(b.dataset.tab);if(b.dataset.tab==='runs')await listRuns();if(b.dataset.tab==='workflow'){await loadBase();drawGraph();}if(['knowledge','automation','evolution'].includes(b.dataset.tab))await loadAdvanced()}));
 $('authBtn').onclick=guard(async()=>{const value=prompt('填写 EAH_TOKEN（仅保存在当前页面内存）');if(value!==null){token=value;await load();flash('凭证已更新')}});
-import { modelConnection } from './model-connection.js?v=20260920-models-1';
+import { modelConnection } from './model-connection.js?v=20260920-pending-1';
 modelConnection({api,$,load,flash});
 async function loadBase(){
   const selectedTool=$('newTool').value;
@@ -103,7 +103,7 @@ const refreshAdvanced=advanced({api,$,guard,flash,models:()=>models,load:()=>loa
 async function loadAdvanced(){await refreshAdvanced();savedWorkflowRows=advancedState.workflows;}
 async function load(){const selected=$('newTool').value;await loadBase();await loadAdvanced();if([...$('newTool').options].some(o=>o.value===selected))$('newTool').value=selected;renderNodes();}
 $('addAdvanced').onclick=guard(()=>{graph.flush();syncNodes();addNode($('nodeKind').value)});
-import { noCodeBuilder } from './no-code.js?v=20260920-models-1';
+import { noCodeBuilder } from './no-code.js?v=20260920-pending-1';
 import { workflowSharing } from './workflow-sharing.js?v=20260920-nodes-1';
 const sharing=workflowSharing({api,$,escape,download,token:()=>token,flash,loadWorkflow,reload:loadBase,showTab});
 $('shareWorkflow').onclick=guard(()=>sharing.share(workflow()));
@@ -117,7 +117,7 @@ import {conversationStudio} from './conversations.js?v=20260920-nodes-1';
 conversationStudio({api,escape,flash,showTab,watch});
 import {extensionStudio} from './extensions.js?v=20260920-nodes-1';
 extensionStudio({api,escape,flash,load,showTab,watch,token:()=>token,download});
-import {connectionStudio} from './connections.js?v=20260920-models-1';
+import {connectionStudio} from './connections.js?v=20260920-pending-1';
 connectionStudio({api,escape,flash,showTab,load});
 import {learningStudio} from './learning.js?v=20260920-nodes-1';
 learningStudio({api,escape,flash,showTab,load});
@@ -129,7 +129,7 @@ import {backendSettings} from './backend-settings.js?v=20260920-nodes-1';
 backendSettings({api,escape,flash});
 import {voiceStudio} from './voice.js';
 voiceStudio({api,escape,flash,token:()=>token});
-import {workspaceChat} from './workspace-chat.js?v=20260920-models-1';
+import {workspaceChat} from './workspace-chat.js?v=20260920-pending-1';
 workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,loadWorkflow,token:()=>token,download,statuses});
 import {workspaceUI} from './workspace-ui.js?v=20260920-nodes-1';
 shell=workspaceUI({api,escape,flash,showTab,renderRunHistory,listWorkflows});

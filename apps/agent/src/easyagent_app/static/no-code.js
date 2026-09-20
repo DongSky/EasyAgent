@@ -32,9 +32,14 @@ export function noCodeBuilder({api,$,escape,download,watch,loadWorkflow,showTab,
       return;
     }
     plan=null;$('tryBtn').disabled=true;
-    const statuses={legacy:'旧版助手尚未生成具体流程',not_built:'等待生成工作流',stale:'需求已更改',queued:'正在准备构建',running:'模型正在安排步骤',retrying:'正在重试构建',failed:'工作流构建失败',invalid:'生成的流程未通过检查',clarification:'还缺少完成需求的条件',cancelled:'构建已取消'};
+    const statuses={waiting_connections:'助手已创建 · 等待连接模型或服务',legacy:'旧版助手尚未生成具体流程',not_built:'等待生成工作流',stale:'需求已更改',queued:'正在准备构建',running:'模型正在安排步骤',retrying:'正在重试构建',failed:'工作流构建失败',invalid:'生成的流程未通过检查',clarification:'还缺少完成需求的条件',cancelled:'构建已取消'};
     const detail=result.message||result.explanation||(result.errors||[]).join('\n')||(['queued','running','retrying'].includes(result.status)?'正在生成流程…':'填写需求后点击“生成工作流”。');
     root.innerHTML=`<h2>${escape(statuses[result.status]||result.status)}</h2><p style="white-space:pre-wrap">${escape(detail)}</p>${result.questions?.length?'<ul>'+result.questions.map(q=>'<li>'+escape(q)+'</li>').join('')+'</ul>':''}${result.build_id?'<small class="muted">构建记录 '+escape(result.build_id.slice(0,8))+'</small>':''}`;
+    if(result.status==='waiting_connections'){
+      root.insertAdjacentHTML('beforeend',`<ul>${(result.required_connections||[]).map(r=>`<li><b>${escape(r.title)}</b><p>${escape(r.reason)}</p></li>`).join('')}</ul>${result.planned_steps?.length?'<h3>步骤草稿 · 待接入</h3><ol>'+result.planned_steps.map(s=>'<li><b>'+escape(s.title)+'</b><p>'+escape(s.description)+'</p><small>等待：'+escape(s.depends_on.map(id=>result.planned_steps.find(step=>step.id===id)?.title||id).join('、')||'无前置步骤')+'</small></li>').join('')+'</ol>':''}${result.workflow?'<h3>已保存的流程草稿 · 待接入后验证</h3>'+diagram(result.workflow):''}<div class="actions"><button type="button" id="setupAssistantConnection">去连接模型或服务</button><button type="button" id="resumeAssistantBuild">已连接，继续生成</button></div>`);
+      $('setupAssistantConnection').onclick=()=>document.querySelector('[data-tab="connections"]').click();
+      $('resumeAssistantBuild').onclick=()=>$('assistantForm').requestSubmit();
+    }
   }
   async function exportProject(id,format='export'){
     const path='/v1/studio/assistants/'+id+'/'+format;
@@ -58,7 +63,7 @@ export function noCodeBuilder({api,$,escape,download,watch,loadWorkflow,showTab,
       const deadline=Date.now()+180000;
       while(ticket===epoch){const result=await api('/v1/studio/assistants/'+id+'/workflow');
         if(signature()!==savedSignature){renderStatus({status:'stale',message:'本次生成对应之前的需求，请根据新需求重新生成。'});break;}
-        renderStatus(result);if(!['queued','running','retrying'].includes(result.status)){$('savedLabel').textContent=result.status==='ready'?'工作流已生成并保存':'请查看下面的构建结果';break;}
+        renderStatus(result);if(!['queued','running','retrying'].includes(result.status)){$('savedLabel').textContent=result.status==='ready'?'工作流已生成并保存':result.status==='waiting_connections'?'助手与需求已保存，等待连接':'请查看下面的构建结果';break;}
         if(Date.now()>deadline)throw Error('构建仍在继续，请稍后通过“我的助手”查看结果');await new Promise(r=>setTimeout(r,500));
       }
       await list();await listWorkflows();
@@ -75,7 +80,7 @@ export function noCodeBuilder({api,$,escape,download,watch,loadWorkflow,showTab,
   return {async refresh(models){
     const managed=await api('/v1/studio/connections');availableModels=models;defaultModel=managed.default_model;drawModels();
     const available=models.filter(m=>m.alias!=='mock'&&m.capabilities.includes('decision'));
-    $('automaticModelStatus').textContent=available.length?'可指定构建模型；生成后的各步骤保留各自的模型配置。':'请先在“设置 → 模型与服务”连接模型。';
+    $('automaticModelStatus').textContent=available.length?'可指定构建模型；生成后的各步骤保留各自的模型配置。':'可以先创建助手并保存需求，稍后连接编排模型继续。';
     const templates=await api('/v1/studio/templates');$('templates').innerHTML=templates.map((t,i)=>`<button class="template" data-template="${i}"><h3>${escape(t.name)}</h3><p class="muted">${escape(t.description)}</p></button>`).join('');
     $('templates').querySelectorAll('button').forEach(b=>b.onclick=()=>{epoch++;identifier=null;preferredModel='auto';drawModels();const t=templates[+b.dataset.template];$('assistantName').value=t.name;$('purpose').value=t.purpose;invalidate();renderStatus({status:'not_built'});});
     await list();

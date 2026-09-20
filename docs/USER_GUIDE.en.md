@@ -90,6 +90,12 @@ Use **Read available models** to fetch IDs from the service, or enter an ID manu
 
 Deleting a connection removes its encrypted key and disables derived image adapters. History remains, while existing references require a replacement or a rebuilt workflow. Changing a default or conversation model does not rewrite model steps in saved workflows.
 
+### Create first, connect later
+
+You can submit a request with attachments or create an assistant before configuring any model. EasyAgent saves it and asks for a language model with structured output. Once a planner is available, missing execution services are listed separately, with a non-executable workflow blueprint when the steps can be planned.
+
+Connect the requested service and return to the original conversation. The agent detects inventory changes, recompiles against actual interfaces, validates, and continues with the original attachments. Adding a connection alone does not run old tasks, unchanged connections do not repeatedly trigger model calls, and stopped tasks remain stopped. Saved assistants offer **Continue after connecting**. Waiting tasks and drafts survive restart; external actions retain normal approvals.
+
 ### Configure TinyFish search
 
 In **Web search** (`联网搜索`), enter your own TinyFish API key and choose **Save connection** or **Save and test**. You can replace a key and test the current connection. Leaving the key blank preserves a previously saved settings key; it does not delete it.

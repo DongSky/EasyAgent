@@ -151,7 +151,7 @@ async def test_builder_no_real_model_no_empty_export_and_legacy_preserved(api):
     async with httpx.AsyncClient(base_url=url) as client:
         saved=(await client.post('/v1/studio/assistants',json={'name':'new','purpose':'write a report','construction':'automatic','model':'auto'})).json()
         path='/v1/studio/assistants/'+saved['id']
-        assert (await client.post(path+'/build')).status_code==422
+        assert (await client.post(path+'/build')).json()['status']=='waiting_connections'
         assert (await client.get(path+'/export')).status_code==409
         assert not hub.store.runs()
         legacy=(await client.post('/v1/studio/assistants',json={'name':'old','purpose':'echo'})).json()

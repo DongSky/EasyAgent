@@ -144,6 +144,20 @@ class BuildCapabilities:
                 'If access is missing, name the service and the specific login/key required, not tool schemas.', content)
             self.checkpoint(ctx, state, draft=proposal, research_compiled=True)
             draft = BuildDraft.model_validate(proposal)
+        if draft.required_connections:
+            if not draft.workflow and not draft.planned_steps:
+                proposal = await self.ask(ctx, args['model'], BuildDraft.model_json_schema(),
+                    'Keep the missing connection requirements and original objective. Add concrete planned_steps '
+                    'with id, title, description, depends_on, requires (requirement IDs). Preserve branches and joins. '
+                    'This is a non-executable plan: do not invent tool schemas or claim unavailable services are connected. '
+                    'Return the full draft with workflow=null and at least one planned step.',
+                    {'requirement': args['assistant']['purpose'], 'draft': draft.model_dump()})
+                draft = BuildDraft.model_validate(proposal)
+                if not draft.required_connections or not draft.planned_steps:
+                    return {'draft': draft.model_dump(), 'errors': ['待接入草稿未保留能力清单或计划步骤，请重试构建。']}
+                self.checkpoint(ctx, state, draft=draft.model_dump())
+            # A missing-service blueprint is never installed or executed as though it were ready.
+            return {'draft': draft.model_dump(), 'tools': [], 'development': state['development']}
         created = list(state.get('api_tools', []))
         if draft.api_candidates and not created:
             try:

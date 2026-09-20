@@ -13,6 +13,7 @@ from pydantic import Field
 from .assistant_builder import select_model, stored, start_build, build_status
 from .contracts import Contract
 from .store import Conflict, encode
+from .pending_connections import MissingPlanningModel, planner_requirement, inventory_fingerprint
 
 TERMINAL = {'succeeded', 'failed', 'cancelled'}
 
@@ -70,6 +71,9 @@ class WorkspaceChat:
                     if row:
                         state = json.loads(row[0])
                         turn['task'] = {k: v for k, v in state.items() if k not in ('candidates', 'request', 'workflow', 'assistant', 'route_workflow', 'context', 'material_text')}
+                        if state.get('phase') == 'waiting_connections':
+                            turn['task']['can_resume'] = self.setup_changed(conversation, state)
+                        turn['task'].pop('inventory', None)
         return conversation
 
     def catalog(self):
@@ -122,16 +126,27 @@ class WorkspaceChat:
             previous = db.execute('SELECT j.state FROM conversation_jobs j JOIN conversation_turns t ON t.id=j.turn_id WHERE t.conversation=? ORDER BY t.created DESC LIMIT 1', (conversation['id'],)).fetchone()
             if previous and not attachments:
                 last = json.loads(previous[0])
-                if last.get('phase') == 'clarification':
+                if last.get('phase') in ('clarification', 'waiting_connections'):
                     info = last.get('attachments', [])
                     attachments = [a['id'] for a in info]
             turn = uuid.uuid4().hex
             text = transformed['text'].strip() or '请处理这些附件。'
             material_text = text
-            if previous and json.loads(previous[0]).get('phase') == 'clarification':
+            if previous and json.loads(previous[0]).get('phase') in ('clarification', 'waiting_connections'):
                 last = json.loads(previous[0])
                 material_text = last.get('material_text', last['request']['text']) + '\n补充：' + text
             state = {'material_text': material_text, 'request': payload, 'phase': 'queued', 'attachments': info, 'attachment_ids': attachments, 'runs': [], 'message': '已收到，正在安排。', 'choices': []}
+            if previous and json.loads(previous[0]).get('phase') == 'waiting_connections':
+                last = json.loads(previous[0])
+                state['previous_draft'] = last.get('blueprint')
+                state['previous_planned_steps'] = last.get('planned_steps', [])
+                # A follow-up replaces the waiting request; do not leave a second runnable copy.
+                for pending in db.execute("SELECT t.id,j.state FROM conversation_turns t JOIN conversation_jobs j ON j.turn_id=t.id "
+                                          "WHERE t.conversation=? AND t.status='waiting_connections'", (conversation['id'],)).fetchall():
+                    old_state = json.loads(pending['state'])
+                    old_state.update(phase='superseded', message='已合并到后续消息。')
+                    db.execute("UPDATE conversation_turns SET status='cancelled' WHERE id=?", (pending['id'],))
+                    db.execute('UPDATE conversation_jobs SET state=? WHERE turn_id=?', (encode(old_state), pending['id']))
             db.execute("INSERT INTO conversation_turns VALUES(?,?,?,?,'queued',NULL,NULL,?,?)", (turn, conversation['id'], text, body.mode, body.idempotency_key, time.time()))
             db.execute('INSERT INTO conversation_jobs VALUES(?,?)', (turn, encode(state)))
             self.hub.conversations.append(db, conversation['id'], turn, 'user', text)
@@ -191,7 +206,12 @@ class WorkspaceChat:
         return [{'role': m['role'], 'content': m['content'][:12000]} for m in messages[-12:]]
 
     def begin(self, conversation, turn, state):
-        model = select_model(self.hub, conversation['model'])
+        try:
+            model = select_model(self.hub, conversation['model'])
+        except MissingPlanningModel:
+            return self.wait_connections(conversation, turn, state, {
+                'explanation': '任务已创建，需求和附件已保存。先接入用于理解需求和编排流程的大语言模型；返回此对话后继续。',
+                'required_connections': [planner_requirement(conversation['model'])], 'workflow': None}, 'planning')
         state['model'] = model
         state['context'] = self.context(conversation, turn)
         if state['request']['intent'] == 'create':
@@ -228,7 +248,7 @@ If selected_workflow is supplied, use that exact candidate or clarify its missin
 Input message is injected from the current user material, attachment_ids contains the uploaded IDs, attachments contains file descriptors.
 Map a file into a named input such as reference_artifact only using its actual uploaded ID. Never pretend you have seen media content from filenames.
 Respond in the user's language. title is only used if creating a new workflow. For intent=chat answer conversationally without choosing or creating a workflow.'''
-        context = {'conversation': state['context'], 'request': turn['text'], 'intent': state['request']['intent'], 'selected_workflow': selected, 'attachments': material, 'catalog': catalog}
+        context = {'conversation': state['context'], 'request': state.get('material_text', turn['text']), 'intent': state['request']['intent'], 'selected_workflow': selected, 'attachments': material, 'catalog': catalog}
         context_json = json.dumps(context, ensure_ascii=False)
         if len(context_json) > 180_000:
             state['phase'] = 'clarification'
@@ -296,6 +316,9 @@ Respond in the user's language. title is only used if creating a new workflow. F
                               purpose=(purpose[:9500] + '\n本次材料类型：' + json.dumps(media, ensure_ascii=False))[:12000],
                               limits={'model_calls': 16, 'tool_calls': 32, 'output_tokens': 32768}).model_dump()
         self.store.memory_put('studio-assistants', identifier, assistant, 'conversation')
+        if state.get('previous_draft') or state.get('previous_planned_steps'):
+            self.store.memory_put('studio-assistant-drafts', identifier, {'workflow': state.get('previous_draft'),
+                                  'planned_steps': state.get('previous_planned_steps', [])}, 'conversation')
         state.update(phase='building_starting', assistant_id=identifier, assistant=assistant, message='正在编排可复用的工作流…')
         if self.save(turn, state, 'starting'):
             self.resume_build(turn, state)
@@ -303,6 +326,8 @@ Respond in the user's language. title is only used if creating a new workflow. F
     def resume_build(self, turn, state):
         existing = stored(self.hub, 'studio-assistant-builds', state['assistant_id'])
         build = {'id': existing['run_id']} if existing else start_build(self.hub, state['assistant_id'], state['assistant'])
+        if build.get('status') == 'waiting_connections':
+            return self.wait_connections(self.hub.conversations.get(turn['conversation']), turn, state, build, 'building')
         state.update(phase='building', run_id=build['id'])
         if build['id'] not in state['runs']:
             state['runs'].append(build['id'])
@@ -326,6 +351,64 @@ Respond in the user's language. title is only used if creating a new workflow. F
         if self.save(turn, state, 'starting'):
             self.resume_build(turn, state)
 
+    def wait_connections(self, conversation, turn, state, plan, stage):
+        state.update(phase='waiting_connections', waiting_stage=stage,
+                     inventory=inventory_fingerprint(self.hub), waiting_model=conversation['model'],
+                     required_connections=plan['required_connections'], blueprint=plan.get('workflow'),
+                     planned_steps=plan.get('planned_steps', []),
+                     message=plan.get('explanation') or '流程草稿已保存，请连接所需模型或服务。')
+        state.pop('workflow', None)
+        self.save(turn, state, 'waiting_connections')
+
+    def setup_changed(self, conversation, state):
+        return (state.get('inventory') != inventory_fingerprint(self.hub)
+                or state.get('waiting_model') != conversation['model'])
+
+    async def resume_connections(self, identifier, turn_id=None):
+        # Re-enter only on an explicit return to the conversation / continue action.
+        # Persist the transition under the same lock as normal turn advancement.
+        async with self.hub.conversations.lock:
+            conversation = self.hub.conversations.get(identifier)
+            if not conversation.get('workspace'):
+                raise ValueError('仅对话办事支持继续待连接任务')
+            if any(t['status'] in ('queued', 'starting', 'running') for t in conversation['turns']):
+                return {'resumed': False}
+            with self.store.connect() as db:
+                row = db.execute("SELECT t.*,j.state FROM conversation_turns t JOIN conversation_jobs j ON j.turn_id=t.id "
+                                 "WHERE t.conversation=? AND t.status='waiting_connections' "
+                                 + ('AND t.id=? ' if turn_id else '') + 'ORDER BY t.created,t.id LIMIT 1',
+                                 (identifier, turn_id) if turn_id else (identifier,)).fetchone()
+            if not row:
+                return {'resumed': False}
+            turn = dict(row)
+            turn['_serialized'] = turn.pop('state')
+            state = json.loads(turn['_serialized'])
+            if not self.setup_changed(conversation, state):
+                return {'resumed': False, 'reason': '连接尚未变化，需求和草稿已保留。'}
+            try:
+                model = select_model(self.hub, conversation['model'])
+            except MissingPlanningModel:
+                self.wait_connections(conversation, turn, state, {
+                    'explanation': '尚未接入可用的编排模型，任务继续保留。',
+                    'required_connections': [planner_requirement(conversation['model'])],
+                    'workflow': state.get('blueprint')}, state['waiting_stage'])
+                return {'resumed': False}
+            if state['waiting_stage'] == 'building' and state.get('assistant'):
+                state['setup_attempt'] = state.get('setup_attempt', 0) + 1
+                state['assistant_id'] = 'chat-' + turn['id'] + '-setup-' + str(state['setup_attempt'])
+                state['assistant'] = {**state['assistant'], 'model': model}
+                self.store.memory_put('studio-assistants', state['assistant_id'], state['assistant'], 'conversation')
+                self.store.memory_put('studio-assistant-drafts', state['assistant_id'],
+                                      {'workflow': state.get('blueprint'), 'required_connections': state['required_connections'],
+                                       'planned_steps': state.get('planned_steps', [])}, 'conversation')
+                state.update(phase='building_starting', model=model, message='已检测到连接变化，正在重新匹配接口并验证流程…')
+            else:
+                state.update(phase='queued', message='已识别到编排模型，继续处理已保存的需求…')
+            state.pop('run_id', None)
+            self.save(turn, state, 'queued')
+        await self.hub.conversations.tick()
+        return {'resumed': True, 'turn_id': turn['id']}
+
     async def tick(self, conversation):
         with self.store.connect() as db:
             row = db.execute("SELECT t.*,j.state FROM conversation_turns t JOIN conversation_jobs j ON j.turn_id=t.id WHERE t.conversation=? AND t.status NOT IN ('succeeded','failed','cancelled') ORDER BY t.created,t.id LIMIT 1", (conversation['id'],)).fetchone()
@@ -337,6 +420,24 @@ Respond in the user's language. title is only used if creating a new workflow. F
         had_runs = bool(state['runs'])
         try:
             phase = state['phase']
+            if phase == 'waiting_connections':
+                with self.store.transaction() as db:
+                    next_row = db.execute("SELECT t.id,t.text,j.state FROM conversation_turns t JOIN conversation_jobs j ON j.turn_id=t.id "
+                                          "WHERE t.conversation=? AND t.status='queued' ORDER BY t.created,t.id LIMIT 1",
+                                          (conversation['id'],)).fetchone()
+                    if next_row:
+                        following = json.loads(next_row['state'])
+                        following['material_text'] = state.get('material_text', turn['text']) + '\n补充：' + following.get('material_text', next_row['text'])
+                        if not following['attachment_ids']:
+                            following['attachments'] = state['attachments']
+                            following['attachment_ids'] = state['attachment_ids']
+                        following['previous_draft'] = state.get('blueprint')
+                        following['previous_planned_steps'] = state.get('planned_steps', [])
+                        db.execute('UPDATE conversation_jobs SET state=? WHERE turn_id=?', (encode(following), next_row['id']))
+                if next_row:
+                    state['phase'] = 'superseded'
+                    self.finish(turn, state, 'cancelled', '已合并到后续消息。')
+                return
             if phase == 'queued':
                 return self.begin(conversation, turn, state)
             if phase == 'building_starting':
@@ -357,6 +458,8 @@ Respond in the user's language. title is only used if creating a new workflow. F
                 return self.decide(turn, state, run)
             if phase == 'building':
                 plan = build_status(self.hub, state['assistant_id'], state['assistant'])
+                if plan['status'] == 'waiting_connections':
+                    return self.wait_connections(conversation, turn, state, plan, 'building')
                 if plan['status'] != 'ready':
                     state['phase'] = 'clarification'
                     return self.finish(turn, state, 'succeeded', plan.get('explanation', '') + '\n' + '\n'.join(plan.get('questions') or plan.get('errors') or ['请补充需求或连接所需服务。']))

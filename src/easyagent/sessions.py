@@ -486,3 +486,7 @@ def install_conversations(app, hub):
     @app.post("/v1/conversations/{identifier}/interrupt")
     async def interrupt(identifier: str):
         return await sessions.interrupt(identifier)
+
+    @app.post("/v1/conversations/{identifier}/resume-connections")
+    async def resume_connections(identifier: str, turn_id: str | None = None):
+        return await hub.chat.resume_connections(identifier, turn_id)
