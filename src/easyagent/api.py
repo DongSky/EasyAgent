@@ -14,6 +14,7 @@ from pydantic import Field, ValidationError as ContractError
 
 from .contracts import Contract, EvaluationSuite, Policy, Workflow
 from .store import Conflict
+from .run_retry import RetryRequest, retry_run
 
 
 class Approval(Contract):
@@ -156,6 +157,10 @@ def create_app(hub, *, token="", manage_workers=True):
     async def cancel(run_id: str):
         hub.store.cancel(run_id)
         return hub.store.run(run_id)
+
+    @app.post("/v1/runs/{run_id}/retry")
+    async def retry(run_id: str, body: RetryRequest):
+        return await retry_run(hub, run_id, body)
 
     @app.get("/v1/runs/{run_id}/events")
     async def events(run_id: str, after: int = Query(default=0, ge=0)):

@@ -224,7 +224,7 @@ multi-stage requests must expose their actual stages. Include a final useful res
                     "id": "compile",
                     "kind": "tool",
                     "target": "development.compile_build",
-                    "max_attempts": 2,
+                    "max_attempts": 3,
                     "timeout_seconds": 420,
                     "input": {
                         "model": model,
@@ -237,7 +237,7 @@ multi-stage requests must expose their actual stages. Include a final useful res
                     },
                 },
                 {"id": "verify", "target": "development.verify_build", "depends_on": ["compile"],
-                 "max_attempts": 2, "timeout_seconds": 600,
+                 "max_attempts": 3, "timeout_seconds": 600,
                  "input": {"draft": {"$ref": "compile.data"}, "assistant_id": identifier,
                            "assistant": assistant, "model": model}},
             ],
@@ -311,7 +311,12 @@ def build_status(hub, identifier, assistant):
         return {
             "status": run["status"],
             "build_id": build["run_id"],
-            "errors": [s["error"] for s in run["steps"] if s["error"]],
+            "errors": [('等待模型返回工作流超时；已完成资料保留，可以从失败处重试。'
+                        if s['error'].startswith('ReadTimeout:') else s['error'])
+                       for s in run['steps'] if s['error']],
+            "retry_steps": [{k: s[k] for k in ('id', 'status', 'attempts', 'ready_at', 'retry_state')}
+                            | {'spec': {'max_attempts': s['spec']['max_attempts']}} for s in run['steps']
+                            if s.get('retry_state', {}).get('error')],
         }
     try:
         verified = next((s['output'] for s in run['steps'] if s['id'] == 'verify'), None)

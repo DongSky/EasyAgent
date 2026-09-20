@@ -25,7 +25,10 @@ async def fold_sse(response, dialect, max_bytes):
             elif kind == "response.completed":
                 final, complete = obj["response"], True
             elif kind in ("response.failed", "response.incomplete", "error"):
-                raise ValueError("provider stream failed or was incomplete")
+                from .retry_policy import ModelResponseError
+                result = obj.get('response') or obj
+                raise ModelResponseError((result.get('incomplete_details') or {}).get('reason')
+                                         or (result.get('error') or {}).get('code'))
         elif dialect == "anthropic":
             kind = obj.get("type")
             if kind == "message_start":

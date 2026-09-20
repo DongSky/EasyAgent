@@ -103,6 +103,8 @@ class Store:
                 db.execute("ALTER TABLE run_usage ADD COLUMN child_runs INTEGER NOT NULL DEFAULT 0")
             if "tool_revision" not in {r[1] for r in db.execute("PRAGMA table_info(invocations)")}:
                 db.execute("ALTER TABLE invocations ADD COLUMN tool_revision INTEGER")
+            if "retry_state" not in {r[1] for r in db.execute("PRAGMA table_info(steps)")}:
+                db.execute("ALTER TABLE steps ADD COLUMN retry_state TEXT NOT NULL DEFAULT '{}'")
             db.execute("PRAGMA user_version=4")
 
     @contextmanager
@@ -183,6 +185,8 @@ class Store:
                 WHERE q.run_id IN (SELECT id FROM tree) AND q.status='waiting' AND s.status='waiting_input'""", (run_id,))]
             usage = db.execute("SELECT * FROM run_usage WHERE run_id=?", (run_id,)).fetchone()
             result["usage"] = dict(usage) if usage else {}
+            from .run_retry import retry_options
+            result['retry'] = retry_options(db, result)
             return result
 
     def runs(self, limit=100, query="", statuses=()):
@@ -202,7 +206,7 @@ class Store:
     @staticmethod
     def decode_step(row):
         d = dict(row)
-        for k in ("spec", "state", "output"):
+        for k in ("spec", "state", "output", "retry_state"):
             if d[k] is not None:
                 d[k] = json.loads(d[k])
         return d
@@ -327,9 +331,12 @@ class Store:
                        (encode(state), job["run_id"], job["id"]))
         job["state"] = state
 
-    def finish(self, job, status, output=None, error=None, delay=0):
+    def finish(self, job, status, output=None, error=None, delay=0, retry_state=None):
         with self.transaction() as db:
             self.assert_owner(db, job)
+            if retry_state is not None:
+                db.execute("UPDATE steps SET retry_state=? WHERE run_id=? AND id=?",
+                           (encode(retry_state), job["run_id"], job["id"]))
             db.execute("""UPDATE steps SET status=?,output=?,error=?,ready_at=?,owner=NULL,lease_until=NULL
                         WHERE run_id=? AND id=?""",
                        (status, encode(output) if output is not None else None, error, time.time() + delay,
@@ -337,7 +344,9 @@ class Store:
             if status in ("waiting_approval", "needs_attention", "waiting_children", "waiting_input", "waiting_remote"):
                 db.execute("UPDATE steps SET attempts=MAX(0,attempts-1) WHERE run_id=? AND id=?", (job["run_id"], job["id"]))
             if status != "waiting_children":
-                self.event(db, job["run_id"], "step." + status, {"step": job["id"], "error": error})
+                self.event(db, job["run_id"], "step." + status, {"step": job["id"], "error": error,
+                    **({"retry": retry_state, "next_retry_at": time.time() + delay if status == "retrying" else None}
+                       if retry_state is not None else {})})
             self.reconcile(db, job["run_id"])
 
     def cancel(self, run_id):

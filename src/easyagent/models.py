@@ -9,6 +9,7 @@ import httpx
 from jsonschema import ValidationError, validate
 
 from .contracts import ModelRequest, ModelResult, ToolCall
+from .retry_policy import ModelResponseError
 
 
 class ModelProvider(Protocol):
@@ -16,9 +17,10 @@ class ModelProvider(Protocol):
 
 
 class ProviderError(RuntimeError):
-    def __init__(self, status):
+    def __init__(self, status, retry_after=None):
         self.status = status
         self.retryable = status in (408, 429) or status >= 500
+        self.retry_after = retry_after
         super().__init__(f"model provider HTTP {status}")
 
 
@@ -108,6 +110,16 @@ class HTTPProvider:
         self.max_bytes = max_bytes
 
     async def post(self, path, payload):
+        from .retry_policy import model_timeout, retry_after
+        # Only reasoning/text calls receive longer waits; never change media write retry semantics.
+        wait = model_timeout(self.timeout) if path in ('/chat/completions', '/responses', '/messages') else self.timeout
+        try:
+            return await self._post(path, payload, wait, retry_after)
+        except (httpx.TransportError, ProviderError) as exc:
+            exc.wait_seconds = wait
+            raise
+
+    async def _post(self, path, payload, wait, parse_retry_after):
         from .model_streaming import MODEL_OBSERVER, fold_sse
         streaming = path in ('/chat/completions', '/responses', '/messages') and (MODEL_OBSERVER.get() is not None or payload.get('stream'))
         if streaming:
@@ -119,11 +131,11 @@ class HTTPProvider:
             headers.update({"x-api-key": self.api_key, "anthropic-version": "2023-06-01"})
         elif self.api_key:
             headers["authorization"] = "Bearer " + self.api_key
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(wait, connect=min(20, wait), pool=min(20, wait))) as client:
             async with client.stream("POST", self.base_url + path, json=payload, headers=headers) as response:
                 if response.status_code >= 400:
                     # Provider responses may echo secrets or private content; do not persist the body.
-                    raise ProviderError(response.status_code)
+                    raise ProviderError(response.status_code, parse_retry_after(response.headers.get('retry-after')))
                 if streaming:
                     if 'text/event-stream' not in response.headers.get('content-type', ''):
                         raise ValueError('provider did not return an SSE stream')
@@ -183,7 +195,8 @@ class HTTPProvider:
                                               "schema": request.response_schema}}
             data = await self.post("/responses", payload)
             if data.get("status") in ("incomplete", "failed", "cancelled"):
-                raise ValueError("provider did not complete the response")
+                raise ModelResponseError((data.get('incomplete_details') or {}).get('reason')
+                    or (data.get('error') or {}).get('code') or data['status'])
             calls, text = [], []
             for item in data.get("output", []):
                 if item["type"] == "function_call":
@@ -210,7 +223,7 @@ class HTTPProvider:
                 "name": "result", "schema": request.response_schema, "strict": False}}
         data = await self.post("/chat/completions", payload)
         if data["choices"][0].get("finish_reason") == "length":
-            raise ValueError("model output was truncated by its token limit")
+            raise ModelResponseError('length')
         result = data["choices"][0]["message"]
         return ModelResult(text=result.get("content") or "", usage=data.get("usage", {}), tool_calls=[
             ToolCall(id=c["id"], name=forward.get(c["function"]["name"], c["function"]["name"]),

@@ -1,4 +1,5 @@
 import {modelChoices} from './model-choice.js';
+import {retryPanel,bindRetry,retryProgress} from './run-retry.js?v=20260920-retry-1';
 // One source of truth: persist the compiled graph, preview it, run it, export it.
 export function noCodeBuilder({api,$,escape,download,watch,loadWorkflow,showTab,listWorkflows,flash,token,shareWorkflow}) {
   let identifier=null,plan=null,savedSignature='',preferredModel='auto',availableModels=[],defaultModel=null,busy=false,epoch=0;
@@ -35,11 +36,27 @@ export function noCodeBuilder({api,$,escape,download,watch,loadWorkflow,showTab,
     const statuses={waiting_connections:'助手已创建 · 等待连接模型或服务',legacy:'旧版助手尚未生成具体流程',not_built:'等待生成工作流',stale:'需求已更改',queued:'正在准备构建',running:'模型正在安排步骤',retrying:'正在重试构建',failed:'工作流构建失败',invalid:'生成的流程未通过检查',clarification:'还缺少完成需求的条件',cancelled:'构建已取消'};
     const detail=result.message||result.explanation||(result.errors||[]).join('\n')||(['queued','running','retrying'].includes(result.status)?'正在生成流程…':'填写需求后点击“生成工作流”。');
     root.innerHTML=`<h2>${escape(statuses[result.status]||result.status)}</h2><p style="white-space:pre-wrap">${escape(detail)}</p>${result.questions?.length?'<ul>'+result.questions.map(q=>'<li>'+escape(q)+'</li>').join('')+'</ul>':''}${result.build_id?'<small class="muted">构建记录 '+escape(result.build_id.slice(0,8))+'</small>':''}`;
+    root.insertAdjacentHTML('beforeend',(result.retry_steps||[]).map(step=>retryProgress(step,escape)).join(''));
+    if(result.status==='failed'&&result.build_id){
+      const slot=document.createElement('div');root.append(slot);const id=identifier,ticket=epoch;
+      api('/v1/runs/'+result.build_id).then(run=>{
+        if(!root.contains(slot)||ticket!==epoch)return;slot.innerHTML=retryPanel(run,escape);
+        bindRetry(slot,run,{api,onRetry:async()=>{busy=true;$('buildAssistant').disabled=true;try{await followBuild(id,ticket);}finally{busy=false;$('buildAssistant').disabled=false;}}});
+      }).catch(report);
+    }
     if(result.status==='waiting_connections'){
       root.insertAdjacentHTML('beforeend',`<ul>${(result.required_connections||[]).map(r=>`<li><b>${escape(r.title)}</b><p>${escape(r.reason)}</p></li>`).join('')}</ul>${result.planned_steps?.length?'<h3>步骤草稿 · 待接入</h3><ol>'+result.planned_steps.map(s=>'<li><b>'+escape(s.title)+'</b><p>'+escape(s.description)+'</p><small>等待：'+escape(s.depends_on.map(id=>result.planned_steps.find(step=>step.id===id)?.title||id).join('、')||'无前置步骤')+'</small></li>').join('')+'</ol>':''}${result.workflow?'<h3>已保存的流程草稿 · 待接入后验证</h3>'+diagram(result.workflow):''}<div class="actions"><button type="button" id="setupAssistantConnection">去连接模型或服务</button><button type="button" id="resumeAssistantBuild">已连接，继续生成</button></div>`);
       $('setupAssistantConnection').onclick=()=>document.querySelector('[data-tab="connections"]').click();
       $('resumeAssistantBuild').onclick=()=>$('assistantForm').requestSubmit();
     }
+  }
+  async function followBuild(id,ticket){
+    const deadline=Date.now()+1800000;
+      while(ticket===epoch){const result=await api('/v1/studio/assistants/'+id+'/workflow');
+        if(signature()!==savedSignature){renderStatus({status:'stale',message:'本次生成对应之前的需求，请根据新需求重新生成。'});break;}
+        renderStatus(result);if(!['queued','running','retrying'].includes(result.status)){$('savedLabel').textContent=result.status==='ready'?'工作流已生成并保存':result.status==='waiting_connections'?'助手与需求已保存，等待连接':'请查看下面的构建结果';break;}
+        if(Date.now()>deadline){$('savedLabel').textContent='构建仍在后台继续，可从任务记录查看进度。';break;}await new Promise(r=>setTimeout(r,500));
+      }
   }
   async function exportProject(id,format='export'){
     const path='/v1/studio/assistants/'+id+'/'+format;
@@ -60,12 +77,7 @@ export function noCodeBuilder({api,$,escape,download,watch,loadWorkflow,showTab,
       const body={name:$('assistantName').value,purpose:$('purpose').value,model:preferredModel,construction:'automatic'};
       const saved=await api('/v1/studio/assistants'+(identifier?'/'+identifier:''),identifier?'PUT':'POST',body);identifier=saved.id;savedSignature=signature();
       const id=identifier;await api('/v1/studio/assistants/'+id+'/build','POST');
-      const deadline=Date.now()+180000;
-      while(ticket===epoch){const result=await api('/v1/studio/assistants/'+id+'/workflow');
-        if(signature()!==savedSignature){renderStatus({status:'stale',message:'本次生成对应之前的需求，请根据新需求重新生成。'});break;}
-        renderStatus(result);if(!['queued','running','retrying'].includes(result.status)){$('savedLabel').textContent=result.status==='ready'?'工作流已生成并保存':result.status==='waiting_connections'?'助手与需求已保存，等待连接':'请查看下面的构建结果';break;}
-        if(Date.now()>deadline)throw Error('构建仍在继续，请稍后通过“我的助手”查看结果');await new Promise(r=>setTimeout(r,500));
-      }
+      await followBuild(id,ticket);
       await list();await listWorkflows();
     }catch(error){renderStatus({status:'failed',message:error.message});throw error;}
     finally{busy=false;$('buildAssistant').disabled=false;}

@@ -17,6 +17,7 @@ from .evolution import Evolution
 from .models import MockProvider, ModelRegistry, ProviderError
 from .skills import SkillRegistry
 from .store import LeaseLost, Store, encode
+from .retry_policy import MODEL_WAIT, attempt_number, error_info, retry_delay
 from .tools import (
     ApprovalRequired,
     ToolRegistry,
@@ -377,7 +378,7 @@ class Hub:
         work = asyncio.create_task(self.execute(job))
         pulse = asyncio.create_task(self.heartbeat(job))
         try:
-            async with asyncio.timeout(job["spec"]["timeout_seconds"]):
+            async with asyncio.timeout(max(job["spec"]["timeout_seconds"], job.get("retry_state", {}).get("step_timeout", 0))):
                 done, _ = await asyncio.wait({work, pulse}, return_when=asyncio.FIRST_COMPLETED)
                 if pulse in done:
                     pulse.result()
@@ -432,7 +433,10 @@ class Hub:
             else:
                 fatal = isinstance(exc, (ValueError, KeyError, PermissionError, SchemaError))
                 fatal = fatal or isinstance(exc, ProviderError) and not exc.retryable
-                retry = not fatal and job["attempts"] < job["spec"]["max_attempts"]
+                attempt = attempt_number(job)
+                info = error_info(exc)
+                fatal = fatal or info['category'] == 'configuration' or getattr(exc, 'retryable', None) is False
+                retry = not fatal and attempt < job["spec"]["max_attempts"]
                 if not retry and job["spec"].get("compensate") and not job["state"].get("compensation"):
                     self.store.checkpoint(
                         job,
@@ -460,8 +464,10 @@ class Hub:
                 self.store.finish(
                     job,
                     "retrying" if retry else "failed",
-                    error=f"{type(exc).__name__}: {str(exc)[:500]}",
-                    delay=min(30, 0.2 * 2 ** (job["attempts"] - 1)) if retry else 0,
+                    error=(info['message'] if info['category'] != 'execution' else f"{type(exc).__name__}: {str(exc)[:500]}"),
+                    delay=retry_delay(info, attempt) if retry else 0,
+                    retry_state={**job.get('retry_state', {}), 'error': info, 'attempt': attempt,
+                                 'max_attempts': job['spec']['max_attempts'], 'scheduled': retry},
                 )
         finally:
             work.cancel()
@@ -471,7 +477,7 @@ class Hub:
     async def execute(self, job):
         spec = Step.model_validate(job["spec"])
         await self.extensions.dispatch("workflow.before_step", {"step": spec.model_dump()}, job=job)
-        if job["attempts"] > spec.max_attempts and not job["state"].get("compensation"):
+        if attempt_number(job) > spec.max_attempts and not job["state"].get("compensation"):
             raise ValueError("step recovery/attempt budget exhausted")
         outputs = {
             s["id"]: s["output"] for s in self.store.run(job["run_id"])["steps"] if s["status"] == "succeeded"
@@ -798,10 +804,12 @@ class Hub:
                     "stream", False
                 )
                 observer = MODEL_OBSERVER.set(observe if streaming else None)
+                wait_settings = MODEL_WAIT.set((attempt_number(job), job.get('retry_state', {}).get('model_timeout')))
                 try:
                     result = await self.models.generate(effective, binding=binding)
                 finally:
                     MODEL_OBSERVER.reset(observer)
+                    MODEL_WAIT.reset(wait_settings)
                 patched = await self.extensions.dispatch("model.after_response", result.model_dump(), job=job)
                 from .contracts import ModelResult
 
@@ -817,6 +825,7 @@ class Hub:
                         request.response_schema,
                     )
             except Exception as exc:
+                exc.model_alias = alias
                 with self.store.transaction() as db:
                     self.store.assert_owner(db, job)
                     db.execute(
@@ -826,10 +835,11 @@ class Hub:
                         db,
                         job["run_id"],
                         "model.failed",
-                        {"call_id": call_id, "error_type": type(exc).__name__},
+                        {"call_id": call_id, "error_type": type(exc).__name__, "detail": error_info(exc)},
                     )
                 permanent = (
                     isinstance(exc, (ValueError, KeyError, PermissionError, SchemaError))
+                    or getattr(exc, 'retryable', None) is False
                     or isinstance(exc, ProviderError)
                     and not exc.retryable
                 )

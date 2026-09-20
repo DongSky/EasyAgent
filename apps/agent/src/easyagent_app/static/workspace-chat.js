@@ -1,4 +1,5 @@
-import {stepStatus} from './run-status.js';
+import {stepStatus} from './run-status.js?v=20260920-retry-1';
+import {retryPanel,bindRetry} from './run-retry.js?v=20260920-retry-1';
 import {modelChoices} from './model-choice.js';
 import {toolLabels} from './ui-labels.js';
 import {formatChat} from './chat-format.js';
@@ -150,7 +151,7 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
   function ensureCard(turn){
     let entry=cards.get(turn.id);if(entry)return entry;
     const root=document.createElement('article');root.className='chat-turn';root.dataset.turn=turn.id;
-    root.innerHTML='<div class="chat-user-message"><small>你</small><div data-user></div><div class="chat-sent-files" data-sent-files></div></div><div class="chat-task-card"><div data-card-heading></div><div data-graph></div><div data-choices class="chat-choices"></div><div class="chat-result-message" data-reply></div><div data-setup></div><div class="chat-result-media" data-media></div><div class="chat-task-actions"><button class="text-button" data-details-toggle aria-expanded="false">展开步骤与结果</button><button class="text-button" data-edit hidden>在画布中打开 ↗</button></div><div class="chat-task-details" data-details hidden></div></div>';
+    root.innerHTML='<div class="chat-user-message"><small>你</small><div data-user></div><div class="chat-sent-files" data-sent-files></div></div><div class="chat-task-card"><div data-card-heading></div><div data-graph></div><div data-choices class="chat-choices"></div><div class="chat-result-message" data-reply></div><div data-setup></div><div data-retry></div><div class="chat-result-media" data-media></div><div class="chat-task-actions"><button class="text-button" data-details-toggle aria-expanded="false">展开步骤与结果</button><button class="text-button" data-edit hidden>在画布中打开 ↗</button></div><div class="chat-task-details" data-details hidden></div></div>';
     entry={root,details:root.querySelector('[data-details]'),media:root.querySelector('[data-media]'),lastDetail:'',lastMedia:'',lastGraph:''};cards.set(turn.id,entry);$('[data-timeline]').append(root);
     root.querySelector('[data-details-toggle]').onclick=guard(async e=>{entry.details.hidden=!entry.details.hidden;e.currentTarget.setAttribute('aria-expanded',String(!entry.details.hidden));e.currentTarget.textContent=entry.details.hidden?'展开步骤与结果':'收起步骤与结果';if(entry.details.hidden)stopWatch(entry.details);else if(entry.run)renderRun(entry.run,entry.details);});
     return entry;
@@ -172,7 +173,7 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
       const heading=`<div class="chat-task-heading"><span class="chat-task-mark ${active?'is-working':''}">${state.phase==='completed'?'✓':state.phase==='failed'?'!':'✦'}</span><div><b>${escape(title)}</b><p>${escape(label)}${state.selected?' · 固定版本 v'+state.selected.revision:''}</p></div>${run&&['executing','completed'].includes(state.phase)?`<span class="chat-step-count">${finished}/${run.steps.length}</span>`:''}</div>${state.reason?`<p class="chat-route-reason">${escape(state.reason)}</p>`:''}`;
       if(heading!==entry.lastHeading){entry.lastHeading=heading;find('[data-card-heading]').innerHTML=heading;}
       if(run&&['executing','completed','failed','cancelled'].includes(state.phase))updateGraph(entry,run);
-      const message=c.messages.find(m=>m.turn_id===turn.id&&m.role==='assistant');find('[data-reply]').innerHTML=formatChat(message?.content||(['clarification','failed','waiting_connections','superseded'].includes(state.phase)?state.message:''),escape);
+      const message=c.messages.filter(m=>m.turn_id===turn.id&&m.role==='assistant').at(-1);find('[data-reply]').innerHTML=formatChat(message?.content||(['clarification','failed','waiting_connections','superseded'].includes(state.phase)?state.message:''),escape);
       find('[data-choices]').innerHTML=(state.choices||[]).map(choice=>`<button data-choice="${escape(choice.key)}">使用 ${escape(choice.title)} →</button>`).join('');find('[data-choices]').querySelectorAll('button').forEach(b=>b.onclick=guard(async()=>{await loadCatalog();$('[data-destination]').value=b.dataset.choice;if(!$('[data-destination]').value)throw Error('流程版本已更新，请在列表重新选择。');$('[data-text]').value=turn.text;files=[...attachments];drawFiles();await send();}));
       const setup=find('[data-setup]');
       setup.innerHTML=state.phase==='waiting_connections'?`<div class="notice"><ul>${(state.required_connections||[]).map(r=>`<li><b>${escape(r.title)}</b><p>${escape(r.reason)}</p></li>`).join('')}</ul><div class="actions"><button data-setup-connect>去连接模型或服务</button><button data-setup-resume ${state.can_resume?'':'disabled'}>识别连接并继续</button></div><p class="muted">需求和附件已保留。连接后返回本对话会继续检查，也可以发送补充说明。</p></div>${state.planned_steps?.length?'<h3>步骤草稿 · 待接入</h3><ol>'+state.planned_steps.map(s=>'<li><b>'+escape(s.title)+'</b><p>'+escape(s.description)+'</p><small>等待：'+escape(s.depends_on.map(id=>state.planned_steps.find(step=>step.id===id)?.title||id).join('、')||'无前置步骤')+'</small></li>').join('')+'</ol>':''}${state.blueprint?'<details><summary>查看已保存的流程草稿（待验证）</summary><ol>'+state.blueprint.steps.map(s=>'<li>'+escape(state.blueprint.metadata?.step_labels?.[s.id]||s.id)+'</li>').join('')+'</ol></details>':''}`:'';
@@ -180,10 +181,12 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
         setup.querySelector('[data-setup-connect]').onclick=()=>document.querySelector('[data-tab="connections"]').click();
         setup.querySelector('[data-setup-resume]').onclick=guard(async()=>{await api('/v1/conversations/'+c.id+'/resume-connections?turn_id='+encodeURIComponent(turn.id),'POST',{});signature='';await refresh();});
       }
+      const retryRoot=find('[data-retry]'),retryKey=JSON.stringify([run?.id,run?.updated,run?.status,run?.retry]);
+      if(entry.retryKey!==retryKey){entry.retryKey=retryKey;retryRoot.innerHTML=run?retryPanel(run,escape):'';if(run)bindRetry(retryRoot,run,{api,onRetry:async()=>{runCache.delete(run.id);signature='';await refresh();}});}
       find('[data-edit]').hidden=!state.selected;find('[data-edit]').onclick=guard(async()=>{const saved=await api(`/v1/studio/workflows/${encodeURIComponent(state.selected.id)}?revision=${state.selected.revision}`);loadWorkflow(saved.workflow,saved);showTab('workflow');});
       find('[data-details-toggle]').hidden=!run;
       if(run){
-        const wait=['waiting_approval','waiting_input','needs_attention'].includes(run.status),detailKey=JSON.stringify([run.status,run.approvals,run.input_requests,run.reconciliations,run.steps.map(s=>[s.id,s.status]),run.children]);
+        const wait=['waiting_approval','waiting_input','needs_attention'].includes(run.status),detailKey=JSON.stringify([run.status,run.approvals,run.input_requests,run.reconciliations,run.steps.map(s=>[s.id,s.status,s.attempts,s.ready_at,s.error]),run.children]);
         if(wait&&entry.lastDetail!==detailKey){entry.details.hidden=false;find('[data-details-toggle]').setAttribute('aria-expanded','true');find('[data-details-toggle]').textContent='收起步骤与结果';}
         if(!entry.details.hidden&&entry.lastDetail!==detailKey){renderRun(run,entry.details);entry.lastDetail=detailKey;}
         if(run.status==='succeeded'&&state.phase==='completed'&&entry.lastMedia!==run.id){
@@ -196,6 +199,7 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
   }
   async function downloadArtifact(a){const r=await fetch('/v1/artifacts/'+encodeURIComponent(a.id)+'/content',{headers:token()?{Authorization:'Bearer '+token()}:{}});if(!r.ok)throw Error('文件读取失败');download(await r.blob(),a.name);}
   async function refresh(){if(!selected||polling)return;polling=true;const id=selected;try{const c=await api('/v1/conversations/'+id);if(id!==selected)return;const next=JSON.stringify(c);if(next!==signature||c.active_run){signature=next;window.dispatchEvent(new CustomEvent('eah:conversation',{detail:{id:c.id}}));window.dispatchEvent(new CustomEvent('eah:message',{detail:{conversation:c.id,messages:c.messages}}));await paint(c);}}finally{polling=false;}}
+  window.addEventListener('eah:run-retried',e=>{runCache.delete(e.detail.id);for(const entry of cards.values()){entry.lastDetail='';entry.retryKey='';}signature='';refresh().catch(e=>flash(e.message));});
   nav.onclick=guard(async()=>{showTab('conversations');await Promise.all([listing(),loadCatalog(),loadModels()]);if(!selected){const cached=localStorage.getItem('easyagent.workspaceConversation');if(historyRows.some(r=>r.id===cached))await choose(cached);}if(selected)await api('/v1/conversations/'+selected+'/resume-connections','POST',{});signature='';await refresh();});
   document.addEventListener('eah:route',e=>{floating.hidden=e.detail.id==='conversations';if(e.detail.id!=='conversations')for(const entry of cards.values())stopWatch(entry.details);});
   document.addEventListener('eah:chat-workflow',guard(async e=>{await nav.onclick();await choose(null);$('[data-destination]').value=e.detail.key;$('[data-destination]').dispatchEvent(new Event('change'));$('[data-text]').focus();}));

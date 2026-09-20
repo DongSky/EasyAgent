@@ -469,11 +469,19 @@ Respond in the user's language. title is only used if creating a new workflow. F
             if run['status'] not in TERMINAL:
                 return
             if run['status'] != 'succeeded':
-                if (run['status'] == 'failed' and phase == 'executing' and state.get('assistant')
+                transient = any(s.get('retry_state', {}).get('error', {}).get('retryable') for s in run['steps'] if s['status'] == 'failed')
+                if not transient and run['children']:
+                    with self.store.connect() as db:
+                        transient = any(json.loads(row[0]).get('error', {}).get('retryable') for row in db.execute(
+                            'WITH RECURSIVE tree(id) AS (SELECT ? UNION ALL SELECT c.child_id FROM child_runs c '
+                            "JOIN tree ON c.parent_id=tree.id) SELECT s.retry_state FROM steps s JOIN tree ON s.run_id=tree.id WHERE s.status='failed'",
+                            (run['id'],)))
+                if (run['status'] == 'failed' and not transient and phase == 'executing' and state.get('assistant')
                         and state.get('repair_attempt', 0) < 2):
                     return self.repair(turn, state, run)
+                state['failed_phase'] = phase
                 state['phase'] = run['status']
-                message = '已停止本轮。' if run['status'] == 'cancelled' else '这次处理未完成。下方保留了出错步骤和记录，可以调整需求后重试。'
+                message = '已停止本轮。' if run['status'] == 'cancelled' else '这次处理未完成。已完成步骤、搜索资料和附件已保留，可从失败处重试。'
                 return self.finish(turn, state, run['status'], message)
             if phase == 'routing':
                 return self.decide(turn, state, run)
