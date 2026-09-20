@@ -1,0 +1,24 @@
+name: Integration
+on: [push, pull_request]
+jobs:
+  integration:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ['3.11', '3.12']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - run: uv sync --extra app --extra dev --python ${{ matrix.python }} --locked
+      - run: uv run --extra app --extra dev ruff check src sdk/python/src apps tests examples
+      - run: cargo build --locked --manifest-path sdk/rust/Cargo.toml --examples
+      - run: uv run --extra app --extra dev pytest -q tests/integration
+      - run: uv run --extra app python -m examples.demos.run_all
+      - run: uv run --extra app python -m examples.demos.advanced
+      - run: uv run --extra app python -m examples.demos.scenarios

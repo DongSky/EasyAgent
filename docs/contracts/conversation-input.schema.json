@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "text": {
+      "default": "",
+      "maxLength": 100000,
+      "title": "Text",
+      "type": "string"
+    },
+    "attachments": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 8,
+      "title": "Attachments",
+      "type": "array"
+    },
+    "intent": {
+      "default": "auto",
+      "enum": [
+        "auto",
+        "create",
+        "workflow",
+        "chat"
+      ],
+      "title": "Intent",
+      "type": "string"
+    },
+    "workflow": {
+      "anyOf": [
+        {
+          "maxLength": 160,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Workflow"
+    },
+    "mode": {
+      "default": "follow_up",
+      "enum": [
+        "follow_up",
+        "steer"
+      ],
+      "title": "Mode",
+      "type": "string"
+    },
+    "idempotency_key": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Idempotency Key",
+      "type": "string"
+    }
+  },
+  "title": "ConversationInput",
+  "type": "object"
+}

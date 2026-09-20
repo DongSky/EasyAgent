@@ -1,0 +1,9 @@
+{
+  "name": "搜索带来源的搬家准备资料",
+  "inputs": {"query": "Hong Kong moving home checklist utilities"},
+  "limits": {"model_calls": 0, "tool_calls": 1},
+  "steps": [
+    {"id": "search", "target": "search.tinyfish", "input": {"query": {"$ref": "$input.query"}, "location": "HK", "language": "en", "purpose": "Prepare a moving checklist with traceable sources"}},
+    {"id": "sources", "kind": "transform", "depends_on": ["search"], "input": {"sources": {"$ref": "search.results"}}}
+  ]
+}

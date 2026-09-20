@@ -1,0 +1,51 @@
+{
+  "id": "formdemo",
+  "title": "装箱清单 · 可视表单验收",
+  "revision": 1,
+  "commands": [
+    {
+      "handler": "summary",
+      "title": "计算装箱数量",
+      "spec": {
+        "name": "formdemo.summary",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "details": {
+              "type": "object",
+              "title": "装箱信息",
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "title": "物品名称"
+                },
+                "fragile": {
+                  "type": "boolean",
+                  "title": "是否易碎"
+                }
+              },
+              "required": [
+                "label",
+                "fragile"
+              ]
+            },
+            "counts": {
+              "type": "array",
+              "title": "各箱数量",
+              "items": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "details",
+            "counts"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  ]
+}

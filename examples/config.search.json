@@ -1,0 +1,4 @@
+{
+  "search": [{"provider": "tinyfish", "name": "search.tinyfish", "api_key_env": "TINYFISH_API_KEY"}],
+  "http_tools": []
+}

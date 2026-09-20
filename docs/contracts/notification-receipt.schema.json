@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "device_id": {
+      "pattern": "^[a-f0-9]{32}$",
+      "title": "Device Id",
+      "type": "string"
+    },
+    "claim_token": {
+      "pattern": "^[a-f0-9]{32}$",
+      "title": "Claim Token",
+      "type": "string"
+    },
+    "outcome": {
+      "enum": [
+        "submitted",
+        "failed"
+      ],
+      "title": "Outcome",
+      "type": "string"
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "enum": [
+            "permission_denied",
+            "unsupported",
+            "notification_error"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reason"
+    }
+  },
+  "required": [
+    "device_id",
+    "claim_token",
+    "outcome"
+  ],
+  "title": "NotificationReceipt",
+  "type": "object"
+}

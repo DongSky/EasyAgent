@@ -1,0 +1,6 @@
+{
+  "models": [],
+  "plugins": ["plugins/python.json"],
+  "skills": ["skills"],
+  "mcp": []
+}

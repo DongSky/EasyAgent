@@ -1,0 +1,1 @@
+{"name":"My first workflow","steps":[{"id":"hello","target":"core.echo","input":{"message":"Hello, EasyAgent"}},{"id":"again","target":"core.echo","depends_on":["hello"],"input":{"previous":{"$ref":"hello.message"}}}]}

@@ -1,0 +1,13 @@
+{
+  "api_version": "1",
+  "name": "python-arithmetic",
+  "command": ["python", "python_plugin.py"],
+  "tools": [{
+    "name": "python.add",
+    "description": "Add two numbers in a Python subprocess",
+    "input_schema": {"type": "object", "properties": {"a": {"type": "number"}, "b": {"type": "number"}}, "required": ["a", "b"], "additionalProperties": false},
+    "output_schema": {"type": "object", "properties": {"value": {"type": "number"}}, "required": ["value"]},
+    "effect": "read",
+    "idempotent": true
+  }]
+}

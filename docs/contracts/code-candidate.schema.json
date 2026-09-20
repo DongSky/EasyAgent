@@ -1,0 +1,559 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "BackendContribution": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "memory",
+            "context",
+            "terminal",
+            "browser",
+            "approval",
+            "channel",
+            "media"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "handler": {
+          "title": "Handler",
+          "type": "string"
+        },
+        "operations": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Operations",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "handler",
+        "operations"
+      ],
+      "title": "BackendContribution",
+      "type": "object"
+    },
+    "CodeScenario": {
+      "additionalProperties": false,
+      "properties": {
+        "tool": {
+          "title": "Tool",
+          "type": "string"
+        },
+        "input": {
+          "additionalProperties": true,
+          "title": "Input",
+          "type": "object"
+        },
+        "expected": {
+          "title": "Expected"
+        }
+      },
+      "required": [
+        "tool",
+        "expected"
+      ],
+      "title": "CodeScenario",
+      "type": "object"
+    },
+    "ExtensionAction": {
+      "additionalProperties": false,
+      "properties": {
+        "spec": {
+          "$ref": "#/$defs/ToolSpec"
+        },
+        "handler": {
+          "title": "Handler",
+          "type": "string"
+        },
+        "title": {
+          "default": "",
+          "title": "Title",
+          "type": "string"
+        },
+        "shortcut": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Shortcut"
+        }
+      },
+      "required": [
+        "spec",
+        "handler"
+      ],
+      "title": "ExtensionAction",
+      "type": "object"
+    },
+    "ExtensionHook": {
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "title": "Event",
+          "type": "string"
+        },
+        "handler": {
+          "title": "Handler",
+          "type": "string"
+        },
+        "priority": {
+          "default": 0,
+          "maximum": 100,
+          "minimum": -100,
+          "title": "Priority",
+          "type": "integer"
+        },
+        "required": {
+          "default": true,
+          "title": "Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "event",
+        "handler"
+      ],
+      "title": "ExtensionHook",
+      "type": "object"
+    },
+    "ExtensionManifest": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "id": {
+          "pattern": "^[a-z][a-z0-9_]{1,47}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 1,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "title": {
+          "maxLength": 160,
+          "minLength": 1,
+          "title": "Title",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "runtime": {
+          "default": "javascript",
+          "enum": [
+            "javascript",
+            "wasm",
+            "python",
+            "node",
+            "rust"
+          ],
+          "title": "Runtime",
+          "type": "string"
+        },
+        "entrypoint": {
+          "default": "extension.js",
+          "title": "Entrypoint",
+          "type": "string"
+        },
+        "transport": {
+          "default": "oneshot",
+          "enum": [
+            "oneshot",
+            "ndjson"
+          ],
+          "title": "Transport",
+          "type": "string"
+        },
+        "migrations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Migrations",
+          "type": "object"
+        },
+        "dependencies": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Dependencies",
+          "type": "object"
+        },
+        "required_services": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Required Services",
+          "type": "array"
+        },
+        "service_versions": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "Service Versions",
+          "type": "object"
+        },
+        "permissions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Permissions",
+          "type": "array"
+        },
+        "env_allow": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Env Allow",
+          "type": "array"
+        },
+        "platforms": {
+          "items": {
+            "enum": [
+              "macos",
+              "windows",
+              "linux",
+              "android",
+              "ios"
+            ],
+            "type": "string"
+          },
+          "title": "Platforms",
+          "type": "array"
+        },
+        "timeout_seconds": {
+          "default": 10,
+          "exclusiveMinimum": 0,
+          "maximum": 120,
+          "title": "Timeout Seconds",
+          "type": "number"
+        },
+        "memory_mb": {
+          "default": 32,
+          "maximum": 256,
+          "minimum": 8,
+          "title": "Memory Mb",
+          "type": "integer"
+        },
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/ExtensionAction"
+          },
+          "title": "Tools",
+          "type": "array"
+        },
+        "services": {
+          "items": {
+            "$ref": "#/$defs/ExtensionAction"
+          },
+          "title": "Services",
+          "type": "array"
+        },
+        "commands": {
+          "items": {
+            "$ref": "#/$defs/ExtensionAction"
+          },
+          "title": "Commands",
+          "type": "array"
+        },
+        "providers": {
+          "items": {
+            "$ref": "#/$defs/ExtensionProvider"
+          },
+          "title": "Providers",
+          "type": "array"
+        },
+        "backends": {
+          "items": {
+            "$ref": "#/$defs/BackendContribution"
+          },
+          "title": "Backends",
+          "type": "array"
+        },
+        "hooks": {
+          "items": {
+            "$ref": "#/$defs/ExtensionHook"
+          },
+          "title": "Hooks",
+          "type": "array"
+        },
+        "views": {
+          "items": {
+            "$ref": "#/$defs/ExtensionView"
+          },
+          "title": "Views",
+          "type": "array"
+        },
+        "skills": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Skills",
+          "type": "object"
+        },
+        "prompts": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Prompts",
+          "type": "object"
+        },
+        "flags_schema": {
+          "additionalProperties": true,
+          "title": "Flags Schema",
+          "type": "object"
+        },
+        "flags": {
+          "additionalProperties": true,
+          "title": "Flags",
+          "type": "object"
+        },
+        "settings_schema": {
+          "additionalProperties": true,
+          "title": "Settings Schema",
+          "type": "object"
+        },
+        "settings": {
+          "additionalProperties": true,
+          "title": "Settings",
+          "type": "object"
+        },
+        "state_schema": {
+          "additionalProperties": true,
+          "title": "State Schema",
+          "type": "object"
+        },
+        "initial_state": {
+          "additionalProperties": true,
+          "title": "Initial State",
+          "type": "object"
+        },
+        "lock": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Lock",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "title"
+      ],
+      "title": "ExtensionManifest",
+      "type": "object"
+    },
+    "ExtensionProvider": {
+      "additionalProperties": false,
+      "properties": {
+        "stream_handler": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Stream Handler"
+        },
+        "cancel_handler": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cancel Handler"
+        },
+        "alias": {
+          "title": "Alias",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "handler": {
+          "title": "Handler",
+          "type": "string"
+        }
+      },
+      "required": [
+        "alias",
+        "model",
+        "capabilities",
+        "handler"
+      ],
+      "title": "ExtensionProvider",
+      "type": "object"
+    },
+    "ExtensionView": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "placement": {
+          "default": "panel",
+          "enum": [
+            "panel",
+            "sidebar",
+            "editor",
+            "message",
+            "status"
+          ],
+          "title": "Placement",
+          "type": "string"
+        },
+        "command": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Command"
+        },
+        "entrypoint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Entrypoint"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ],
+      "title": "ExtensionView",
+      "type": "object"
+    },
+    "ToolSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "pattern": "^[a-zA-Z][a-zA-Z0-9_.-]{0,100}$",
+          "title": "Name",
+          "type": "string"
+        },
+        "description": {
+          "default": "",
+          "title": "Description",
+          "type": "string"
+        },
+        "input_schema": {
+          "additionalProperties": true,
+          "title": "Input Schema",
+          "type": "object"
+        },
+        "output_schema": {
+          "additionalProperties": true,
+          "title": "Output Schema",
+          "type": "object"
+        },
+        "effect": {
+          "default": "read",
+          "enum": [
+            "read",
+            "write",
+            "local"
+          ],
+          "title": "Effect",
+          "type": "string"
+        },
+        "idempotent": {
+          "default": true,
+          "title": "Idempotent",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "ToolSpec",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "manifest": {
+      "$ref": "#/$defs/ExtensionManifest"
+    },
+    "files": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Relative source filename to text. JavaScript defines global handle(request), returning {result: value}; lifecycle.* returns {result:{}}. A tool's handler matches request.method and arguments are request.params.",
+      "title": "Files",
+      "type": "object"
+    },
+    "scenarios": {
+      "items": {
+        "$ref": "#/$defs/CodeScenario"
+      },
+      "maxItems": 30,
+      "minItems": 1,
+      "title": "Scenarios",
+      "type": "array"
+    }
+  },
+  "required": [
+    "manifest",
+    "files",
+    "scenarios"
+  ],
+  "title": "CodeCandidate",
+  "type": "object"
+}

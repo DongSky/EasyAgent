@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "ComponentReference": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "api",
+            "node",
+            "workflow",
+            "component"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 0,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Digest",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "revision",
+        "digest"
+      ],
+      "title": "ComponentReference",
+      "type": "object"
+    },
+    "RuntimeRequirements": {
+      "additionalProperties": false,
+      "properties": {
+        "platforms": {
+          "items": {
+            "enum": [
+              "macos",
+              "windows",
+              "linux",
+              "android",
+              "ios"
+            ],
+            "type": "string"
+          },
+          "title": "Platforms",
+          "type": "array"
+        },
+        "capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Capabilities",
+          "type": "array"
+        },
+        "network_origins": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Network Origins",
+          "type": "array"
+        },
+        "credential_refs": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Credential Refs",
+          "type": "array"
+        },
+        "memory_mb": {
+          "default": 64,
+          "minimum": 1,
+          "title": "Memory Mb",
+          "type": "integer"
+        }
+      },
+      "title": "RuntimeRequirements",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "id": {
+      "pattern": "^[a-zA-Z][a-zA-Z0-9_.-]{0,100}$",
+      "title": "Id",
+      "type": "string"
+    },
+    "revision": {
+      "minimum": 1,
+      "title": "Revision",
+      "type": "integer"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    },
+    "description": {
+      "title": "Description",
+      "type": "string"
+    },
+    "source": {
+      "$ref": "#/$defs/ComponentReference"
+    },
+    "dependencies": {
+      "items": {
+        "$ref": "#/$defs/ComponentReference"
+      },
+      "title": "Dependencies",
+      "type": "array"
+    },
+    "input_schema": {
+      "additionalProperties": true,
+      "title": "Input Schema",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "title": "Output Schema",
+      "type": "object"
+    },
+    "defaults": {
+      "additionalProperties": true,
+      "title": "Defaults",
+      "type": "object"
+    },
+    "requirements": {
+      "$ref": "#/$defs/RuntimeRequirements"
+    },
+    "effect": {
+      "default": "read",
+      "enum": [
+        "read",
+        "write",
+        "local"
+      ],
+      "title": "Effect",
+      "type": "string"
+    },
+    "docs": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Docs",
+      "type": "array"
+    },
+    "validation": {
+      "default": "unverified",
+      "enum": [
+        "protocol_integration",
+        "live_verified",
+        "unverified"
+      ],
+      "title": "Validation",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "revision",
+    "title",
+    "description",
+    "source"
+  ],
+  "title": "ComponentManifest",
+  "type": "object"
+}

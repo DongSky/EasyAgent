@@ -1,0 +1,9 @@
+{
+  "name": "并行查价：交通与酒店 → 汇合 → 预算",
+  "metadata": {"family": "BFCL-inspired", "synthetic": true},
+  "steps": [
+    {"id": "transport", "target": "scenario.quote", "input": {"kind": "transport"}},
+    {"id": "hotel", "target": "scenario.quote", "input": {"kind": "hotel"}},
+    {"id": "total", "target": "scenario.total", "depends_on": ["transport", "hotel"], "input": {"quotes": [{"$ref": "transport"}, {"$ref": "hotel"}]}}
+  ]
+}

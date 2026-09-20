@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "PackageDefinition": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "api",
+            "node",
+            "workflow",
+            "component"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,100}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "revision": {
+          "minimum": 0,
+          "title": "Revision",
+          "type": "integer"
+        },
+        "digest": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Digest",
+          "type": "string"
+        },
+        "body": {
+          "additionalProperties": true,
+          "title": "Body",
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "revision",
+        "digest",
+        "body"
+      ],
+      "title": "PackageDefinition",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "format": {
+      "const": "easyagent.component.v1",
+      "default": "easyagent.component.v1",
+      "title": "Format",
+      "type": "string"
+    },
+    "root": {
+      "title": "Root",
+      "type": "string"
+    },
+    "root_revision": {
+      "minimum": 1,
+      "title": "Root Revision",
+      "type": "integer"
+    },
+    "runtime_contract": {
+      "const": "easyagent.workflow.v1",
+      "default": "easyagent.workflow.v1",
+      "title": "Runtime Contract",
+      "type": "string"
+    },
+    "definitions": {
+      "items": {
+        "$ref": "#/$defs/PackageDefinition"
+      },
+      "maxItems": 500,
+      "minItems": 1,
+      "title": "Definitions",
+      "type": "array"
+    },
+    "digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Digest",
+      "type": "string"
+    }
+  },
+  "required": [
+    "root",
+    "root_revision",
+    "definitions",
+    "digest"
+  ],
+  "title": "ComponentPackage",
+  "type": "object"
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "passed": {
+      "title": "Passed",
+      "type": "boolean"
+    },
+    "evidence": {
+      "maxLength": 8000,
+      "minLength": 1,
+      "title": "Evidence",
+      "type": "string"
+    },
+    "unmet": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 50,
+      "title": "Unmet",
+      "type": "array"
+    }
+  },
+  "required": [
+    "passed",
+    "evidence"
+  ],
+  "title": "Verdict",
+  "type": "object"
+}

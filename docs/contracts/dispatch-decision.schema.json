@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "enum": [
+        "use",
+        "create",
+        "clarify",
+        "reply"
+      ],
+      "title": "Action",
+      "type": "string"
+    },
+    "candidate": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Candidate"
+    },
+    "confidence": {
+      "default": 0,
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Confidence",
+      "type": "number"
+    },
+    "inputs": {
+      "additionalProperties": true,
+      "title": "Inputs",
+      "type": "object"
+    },
+    "message": {
+      "maxLength": 4000,
+      "minLength": 1,
+      "title": "Message",
+      "type": "string"
+    },
+    "alternatives": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 4,
+      "title": "Alternatives",
+      "type": "array"
+    },
+    "title": {
+      "default": "新的助手",
+      "maxLength": 100,
+      "title": "Title",
+      "type": "string"
+    }
+  },
+  "required": [
+    "action",
+    "message"
+  ],
+  "title": "DispatchDecision",
+  "type": "object"
+}

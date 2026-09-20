@@ -1,0 +1,122 @@
+{
+  "id": "guide",
+  "revision": 2,
+  "title": "报价与用量示例",
+  "runtime": "javascript",
+  "description": "受控 JavaScript 扩展：工具、命令、状态、上下文钩子和面板。",
+  "entrypoint": "extension.js",
+  "tools": [
+    {
+      "spec": {
+        "name": "guide.quote",
+        "description": "计算单价与数量的总报价，返回货币单位",
+        "input_schema": {
+          "type": "object",
+          "properties": {
+            "price": {
+              "type": "number",
+              "title": "单价",
+              "minimum": 0
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 1,
+              "title": "数量"
+            },
+            "currency": {
+              "type": "string",
+              "title": "币种",
+              "description": "使用输入材料中的货币，例如 CNY、HKD、USD；不能猜测或更换币种。",
+              "minLength": 1,
+              "maxLength": 12
+            }
+          },
+          "required": [
+            "price",
+            "count",
+            "currency"
+          ],
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "total": {
+              "type": "number"
+            },
+            "currency": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "total",
+            "currency"
+          ]
+        }
+      },
+      "handler": "quote",
+      "title": "计算报价"
+    }
+  ],
+  "commands": [
+    {
+      "spec": {
+        "name": "guide.counter",
+        "effect": "local",
+        "input_schema": {
+          "type": "object",
+          "additionalProperties": false
+        },
+        "output_schema": {
+          "type": "object",
+          "properties": {
+            "count": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "count"
+          ]
+        }
+      },
+      "handler": "counter",
+      "title": "记录一次使用"
+    }
+  ],
+  "hooks": [
+    {
+      "event": "context.transform",
+      "handler": "context"
+    }
+  ],
+  "views": [
+    {
+      "id": "usage",
+      "title": "使用计数",
+      "command": "guide.counter",
+      "description": "执行后更新扩展自己的持久状态。"
+    }
+  ],
+  "initial_state": {
+    "count": 0
+  },
+  "state_schema": {
+    "type": "object",
+    "properties": {
+      "count": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "required": [
+      "count"
+    ],
+    "additionalProperties": false
+  },
+  "skills": {
+    "quotes": "报价计算应比较相同数量和货币单位，并列出未包含的费用。"
+  },
+  "prompts": {
+    "compare": "比较这些报价，明确总额、货币和未包含费用。"
+  }
+}

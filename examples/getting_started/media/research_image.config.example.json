@@ -1,0 +1,77 @@
+{
+  "search": [
+    {
+      "name": "search.tinyfish",
+      "api_key_env": "TINYFISH_API_KEY"
+    }
+  ],
+  "models": [
+    {
+      "alias": "image-writer",
+      "base_url": "https://your-provider.example/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "model": "replace-with-your-text-model",
+      "capabilities": [
+        "chat",
+        "decision"
+      ]
+    }
+  ],
+  "http_tools": [
+    {
+      "name": "image.edit",
+      "description": "Generate an image from a reference image and a researched prompt",
+      "url": "https://your-provider.example/v1/images/edits",
+      "method": "POST",
+      "api_key_env": "OPENAI_API_KEY",
+      "request_encoding": "multipart",
+      "file_parameters": [
+        "image"
+      ],
+      "response_mode": "media",
+      "max_response_bytes": 10000000,
+      "timeout_seconds": 120,
+      "effect": "write",
+      "idempotent": false,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string",
+            "minLength": 1
+          },
+          "image": {
+            "type": "string",
+            "minLength": 1
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "size": {
+            "enum": [
+              "1024x1024",
+              "1536x1024",
+              "1024x1536"
+            ]
+          },
+          "n": {
+            "const": 1
+          },
+          "quality": {
+            "const": "medium"
+          }
+        },
+        "required": [
+          "model",
+          "image",
+          "prompt",
+          "size",
+          "n",
+          "quality"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

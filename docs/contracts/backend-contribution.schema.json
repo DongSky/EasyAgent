@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "kind": {
+      "enum": [
+        "memory",
+        "context",
+        "terminal",
+        "browser",
+        "approval",
+        "channel",
+        "media"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "handler": {
+      "title": "Handler",
+      "type": "string"
+    },
+    "operations": {
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "title": "Operations",
+      "type": "array"
+    }
+  },
+  "required": [
+    "kind",
+    "handler",
+    "operations"
+  ],
+  "title": "BackendContribution",
+  "type": "object"
+}

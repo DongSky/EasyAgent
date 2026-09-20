@@ -1,0 +1,8 @@
+{
+  "name": "缺少时间：请求补充 → 暂停 → 校验 → 查询",
+  "metadata": {"family": "ToolSandbox/BFCL-inspired", "synthetic": true},
+  "steps": [
+    {"id": "clarify", "kind": "input", "input": {"prompt": "请给出查询起点和时区", "schema": {"type": "object", "properties": {"after": {"type": "string", "format": "date-time"}}, "required": ["after"], "additionalProperties": false}}},
+    {"id": "reminders", "target": "scenario.reminders", "depends_on": ["clarify"], "input": {"after": {"$ref": "clarify.after"}}}
+  ]
+}

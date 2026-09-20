@@ -1,0 +1,9 @@
+{
+  "name": "已知时间：时钟 → 提醒查询 → 带来源结果",
+  "metadata": {"family": "ToolSandbox-inspired", "synthetic": true},
+  "steps": [
+    {"id": "clock", "target": "scenario.clock"},
+    {"id": "reminders", "target": "scenario.reminders", "depends_on": ["clock"], "input": {"after": {"$ref": "clock.now"}}},
+    {"id": "receipt", "kind": "artifact", "depends_on": ["reminders"], "input": {"name": "reminders.json", "media_type": "application/json", "content": {"$ref": "reminders"}}}
+  ]
+}

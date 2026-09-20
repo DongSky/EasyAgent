@@ -1,0 +1,17 @@
+[package]
+name = "easyagent-core"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Portable durable DAG state machine with explicit platform host actions"
+[lib]
+name = "easyagent_core"
+crate-type = ["rlib", "staticlib", "cdylib"]
+[dependencies]
+serde = {version="1",features=["derive"]}
+serde_json = "1"
+[features]
+android = ["dep:jni"]
+[dependencies.jni]
+version="0.21"
+optional=true

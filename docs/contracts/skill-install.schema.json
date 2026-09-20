@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "SkillPackage": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "files": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Files",
+          "type": "object"
+        },
+        "source": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Source",
+          "type": "object"
+        }
+      },
+      "required": [
+        "files"
+      ],
+      "title": "SkillPackage",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "package": {
+      "$ref": "#/$defs/SkillPackage"
+    },
+    "expected_revision": {
+      "default": 0,
+      "minimum": 0,
+      "title": "Expected Revision",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "package"
+  ],
+  "title": "SkillInstall",
+  "type": "object"
+}

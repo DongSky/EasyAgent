@@ -1,0 +1,11 @@
+{
+  "name": "取消订单：身份 → 查询 → 规则 → 确认 → 原子写入 → 回执",
+  "metadata": {"family": "tau-bench-inspired", "synthetic": true},
+  "inputs": {"credential": "synthetic-session", "order_id": "order-demo"},
+  "steps": [
+    {"id": "identity", "target": "scenario.identity", "input": {"credential": {"$ref": "$input.credential"}}},
+    {"id": "order", "target": "scenario.order", "depends_on": ["identity"], "input": {"id": {"$ref": "$input.order_id"}, "customer": {"$ref": "identity.customer"}}},
+    {"id": "cancel", "target": "scenario.cancel", "depends_on": ["order"], "when": {"source": "order.status", "equals": "pending"}, "input": {"id": {"$ref": "order.id"}, "customer": {"$ref": "identity.customer"}, "reason": "no_longer_needed"}},
+    {"id": "receipt", "kind": "artifact", "depends_on": ["cancel"], "input": {"name": "cancellation.json", "media_type": "application/json", "content": {"$ref": "cancel"}}}
+  ]
+}

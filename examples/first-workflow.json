@@ -1,0 +1,8 @@
+{
+  "name": "第一条流程：输入 → 工具 → 产物",
+  "inputs": {"message": "你好，EasyAgent"},
+  "steps": [
+    {"id": "echo", "target": "core.echo", "input": {"message": {"$ref": "$input.message"}}},
+    {"id": "save", "kind": "artifact", "depends_on": ["echo"], "input": {"name": "hello.json", "media_type": "application/json", "content": {"$ref": "echo"}}}
+  ]
+}
