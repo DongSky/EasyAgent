@@ -98,7 +98,7 @@ def main():
         sock.setblocking(False)
         port = sock.getsockname()[1]
         (root / "runtime.json").write_text(
-            json.dumps({"url": f"http://127.0.0.1:{port}", "pid": os.getpid()})
+            json.dumps({"url": f"http://127.0.0.1:{port}", "pid": os.getpid()}), encoding="utf-8"
         )
         if not os.environ.get("EAH_DESKTOP_NO_BROWSER"):
             asyncio.get_running_loop().call_later(1, webbrowser.open, f"http://127.0.0.1:{port}")

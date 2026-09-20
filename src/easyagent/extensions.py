@@ -517,7 +517,7 @@ class ExtensionHost:
             if path.is_symlink() or any(p.is_symlink() for p in path.parents if p != self.root.parent):
                 raise PermissionError("extension cache must not contain symlinks")
             path.parent.mkdir(parents=True, exist_ok=True)
-            if path.exists() and path.read_text() != content:
+            if path.exists() and path.read_text(encoding="utf-8") != content:
                 raise PermissionError("extension cache has been modified")
             if not path.exists():
                 path.write_text(content, encoding="utf-8")

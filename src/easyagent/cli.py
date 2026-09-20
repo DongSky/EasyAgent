@@ -137,7 +137,7 @@ def main():
             print(json.dumps(scaffold(args.directory, args.id, args.language)))
         elif args.extension_command == "package":
             package = package_directory(args.directory)
-            Path(args.output).write_text(package.model_dump_json(indent=2))
+            Path(args.output).write_text(package.model_dump_json(indent=2), encoding="utf-8")
             print(json.dumps({"output": args.output, "digest": package.digest}))
         else:
 
@@ -146,7 +146,7 @@ def main():
                     print(
                         json.dumps(
                             await client.install_extension(
-                                json.loads(Path(args.file).read_text()),
+                                json.loads(Path(args.file).read_text(encoding="utf-8")),
                                 grants=args.grant,
                                 trust_digest=args.trust_digest,
                             )

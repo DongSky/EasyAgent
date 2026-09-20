@@ -46,7 +46,7 @@ def smoke(executable, directory, logs):
                     raise RuntimeError(f'Application exited early ({process.returncode}); see smoke.log')
                 state = directory / 'data/runtime.json'
                 try:
-                    origin = json.loads(state.read_text())['url']
+                    origin = json.loads(state.read_text(encoding="utf-8"))['url']
                     with opener.open(origin + '/health', timeout=2) as response:
                         assert response.status == 200
                     break

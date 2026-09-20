@@ -8,7 +8,7 @@ import tomllib
 
 root = Path(__file__).resolve().parents[2]
 os.chdir(root)
-version = tomllib.loads((root / 'pyproject.toml').read_text())['project']['version']
+version = tomllib.loads((root / 'pyproject.toml').read_text(encoding="utf-8"))['project']['version']
 command = [
     sys.executable,
     "-m",

@@ -25,7 +25,7 @@ async def command(args, token):
 
     if args.skill_command == "package":
         body = package_directory(args.directory)
-        Path(args.output).write_text(json.dumps(body, ensure_ascii=False, indent=2))
+        Path(args.output).write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
         return {"output": args.output}
     async with HubClient(args.url, token, timeout=90) as client:
         if args.skill_command == "list":
@@ -35,9 +35,9 @@ async def command(args, token):
             body = (
                 package_directory(path)
                 if path.is_dir()
-                else {"files": {"SKILL.md": path.read_text()}}
+                else {"files": {"SKILL.md": path.read_text(encoding="utf-8")}}
                 if path.suffix == ".md"
-                else json.loads(path.read_text())
+                else json.loads(path.read_text(encoding="utf-8"))
             )
             return await client.install_skill(body, args.expected_revision)
         return await client.skill_source(args.repository, args.path, args.ref)

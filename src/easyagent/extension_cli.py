@@ -49,18 +49,18 @@ println!("{}",serde_json::json!({"result":result}));}
         manifest["permissions"] = ["trusted_process"]
     # Validate before creating files.
     build_package(manifest, files)
-    (root / "manifest.json").write_text(json.dumps(manifest, indent=2))
-    (root / "sources.json").write_text(json.dumps(list(files), indent=2))
+    (root / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    (root / "sources.json").write_text(json.dumps(list(files), indent=2), encoding="utf-8")
     for path, content in files.items():
         (root / path).parent.mkdir(parents=True, exist_ok=True)
-        (root / path).write_text(content)
+        (root / path).write_text(content, encoding="utf-8")
     return {"directory": str(root), "next": "eah extension package " + str(root)}
 
 
 def package_directory(directory):
     root = Path(directory)
-    manifest = json.loads((root / "manifest.json").read_text())
-    names = json.loads((root / "sources.json").read_text())
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    names = json.loads((root / "sources.json").read_text(encoding="utf-8"))
     if manifest.get("runtime") == "rust":
         import subprocess
 
@@ -83,7 +83,7 @@ def package_directory(directory):
         path = root / name
         if not path.resolve().is_relative_to(root.resolve()) or path.is_symlink():
             raise ValueError("source path escapes project")
-        files[name] = path.read_text()
+        files[name] = path.read_text(encoding="utf-8")
     from .components import digest
 
     manifest["lock"] = {name: digest(value) for name, value in files.items()}

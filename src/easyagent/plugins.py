@@ -33,7 +33,7 @@ async def bounded_read(stream, limit):
 
 def load_plugin(registry, path):
     path = Path(path).resolve()
-    manifest = PluginManifest.model_validate_json(path.read_text())
+    manifest = PluginManifest.model_validate_json(path.read_text(encoding="utf-8"))
     if manifest.api_version != "1":
         raise ValueError("unsupported plugin protocol version")
     if manifest.isolation != "process" or manifest.image:

@@ -24,8 +24,8 @@ def install_extensions(app, hub):
 
         root = Path(examples.__file__).parent / "extensions" / "guide"
         return build_package(
-            json.loads((root / "manifest.json").read_text()),
-            {"extension.js": (root / "extension.js").read_text()},
+            json.loads((root / "manifest.json").read_text(encoding="utf-8")),
+            {"extension.js": (root / "extension.js").read_text(encoding="utf-8")},
         )
 
     @app.get("/v1/extensions/schema")

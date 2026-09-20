@@ -54,7 +54,7 @@ def operation_title(op):
 class ModelCatalog:
     def __init__(self, hub):
         self.hub = hub
-        self.snapshot = json.loads(Path(__file__).with_name('data').joinpath('model_protocols.json').read_text())
+        self.snapshot = json.loads(Path(__file__).with_name('data').joinpath('model_protocols.json').read_text(encoding="utf-8"))
         self.operations = {op['id']: op for op in self.snapshot['operations']}
         self.connection = None
         self.models = self.snapshot['models']
