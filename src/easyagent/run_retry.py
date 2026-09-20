@@ -11,6 +11,17 @@ class RetryRequest(Contract):
     longer_wait: bool = False
 
 
+def legacy_build_budget(spec):
+    """Only upgrade the former internal builder default, never user-authored workflow limits."""
+    steps = spec.get('steps', [])
+    limits = spec.get('limits', {})
+    return bool(spec.get('metadata', {}).get('assistant_builder') and len(steps) == 2
+                and [(s['id'], s.get('target')) for s in steps] == [
+                    ('compile', 'development.compile_build'), ('verify', 'development.verify_build')]
+                and limits.get('model_calls') == 8 and limits.get('tool_calls') == 8
+                and limits.get('output_tokens') == 65536)
+
+
 def retry_options(db, run, _nested=False):
     steps = db.execute("SELECT * FROM steps WHERE run_id=?", (run['id'],)).fetchall()
     failures = [s for s in steps if s['status'] == 'failed']
@@ -25,6 +36,9 @@ def retry_options(db, run, _nested=False):
         reason = '失败步骤已进入补偿处理，请核对结果后调整流程。'
     spec = json.loads(run['spec']) if isinstance(run['spec'], str) else run['spec']
     limits = spec.get('limits', {})
+    upgrade = legacy_build_budget(spec)
+    if upgrade:
+        limits = {**limits, 'model_calls': 24}
     if not reason and time.time() - run['created'] >= limits.get('wall_time_seconds', 604800):
         reason = '任务总时间预算已用尽，重试不会重置预算。'
     usage = db.execute('SELECT * FROM run_usage WHERE run_id=?', (run['id'],)).fetchone()
@@ -46,6 +60,7 @@ def retry_options(db, run, _nested=False):
                 reason = '子流程不能直接重试：' + nested['reason']
                 break
     return {'allowed': not reason, 'reason': reason, 'longer_wait': not reason and timeout,
+            'build_budget_upgrade': upgrade,
             'failed_steps': [s['id'] for s in failures],
             'preserved_steps': sum(s['status'] == 'succeeded' for s in steps)}
 
@@ -90,6 +105,13 @@ async def retry_run(hub, run_id, body):
                 'SELECT c.child_id FROM child_runs c JOIN tree ON c.parent_id=tree.id) '
                 "SELECT r.id FROM tree JOIN runs r ON r.id=tree.id WHERE r.status='failed'", (run_id,))]
             for target_id in reversed(retry_ids):
+                target = json.loads(db.execute('SELECT spec FROM runs WHERE id=?', (target_id,)).fetchone()[0])
+                if legacy_build_budget(target):
+                    target['limits']['model_calls'] = 24
+                    db.execute('UPDATE runs SET spec=? WHERE id=?', (encode(target), target_id))
+                    hub.store.event(db, target_id, 'build.budget_upgraded', {
+                        'model_calls_before': 8, 'model_calls_after': 24,
+                        'output_tokens': 65536, 'usage_preserved': True})
                 reset_failed_steps(db, target_id, body.longer_wait)
                 hub.store.reconcile(db, target_id)
             hub.store.event(db, run_id, 'run.retried', {'failed_steps': options['failed_steps'],

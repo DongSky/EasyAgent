@@ -10,6 +10,8 @@ from easyagent.assistant_builder import build_status, start_build
 from easyagent.contracts import ModelRequest, ModelResult, ToolSpec
 from easyagent.models import HTTPProvider
 from easyagent.retry_policy import ModelResponseError
+from easyagent.run_retry import RetryRequest, retry_run
+from easyagent.store import encode
 from test_autonomous_build import CSVBuilder, assistant
 
 
@@ -165,3 +167,88 @@ async def test_segmented_code_is_tested_and_repaired_before_publication(hub):
     assert plan['status'] == 'ready', plan
     assert [r['passed'] for r in plan['development']] == [False, True]
     assert [c['package']['manifest']['revision'] for c in hub.code.list() if c['status'] == 'published'] == [2]
+
+
+async def test_legacy_builder_retry_migrates_default_limit_without_resetting_usage(hub):
+    calls = 0
+
+    class Builder:
+        async def generate(self, request, model):
+            nonlocal calls
+            calls += 1
+            if request.response_schema['title'] == 'BuildDraft':
+                raise ModelResponseError('length')
+            context = json.loads(request.messages[-1]['content'])
+            if calls > 8:
+                assert context['draft']['explanation'] == 'saved 8'
+                batch = {'edits': [{'op': 'set', 'path': ['workflow'], 'value': {
+                    'name': 'finished', 'steps': [{'id': 'echo', 'target': 'core.echo'}]}}], 'done': True}
+            else:
+                batch = {'edits': [{'op': 'set', 'path': ['explanation'], 'value': f'saved {calls}'}], 'done': False}
+            return ModelResult(data=batch, usage={'input_tokens': 10, 'output_tokens': 10})
+
+    hub.models.register('planner', Builder(), 'fixture', ['decision'])
+    body = assistant('complete a legacy build')
+    identifier = start_build(hub, 'legacy', body)['id']
+    with hub.store.transaction() as db:
+        spec = json.loads(db.execute('SELECT spec FROM runs WHERE id=?', (identifier,)).fetchone()[0])
+        spec['limits']['model_calls'] = 8
+        db.execute('UPDATE runs SET spec=? WHERE id=?', (encode(spec), identifier))
+    failed = await hub.wait(identifier)
+    assert failed['status'] == 'failed' and failed['steps'][0]['retry_state']['error']['category'] == 'budget'
+    assert calls == 8 and failed['retry']['allowed'] and failed['retry']['build_budget_upgrade']
+    resumed = await retry_run(hub, identifier, RetryRequest(expected_updated=failed['updated']))
+    assert resumed['usage'] == failed['usage']
+    assert resumed['spec']['limits']['model_calls'] == 24
+    assert resumed['spec']['limits']['output_tokens'] == failed['spec']['limits']['output_tokens']
+    completed = await hub.wait(identifier)
+    assert completed['status'] == 'succeeded', completed
+    assert calls == 9
+    assert build_status(hub, 'legacy', body)['status'] == 'ready'
+    assert any(e['kind'] == 'build.budget_upgraded' for e in hub.store.events(identifier))
+
+
+async def test_internal_assembler_accepts_previous_call_signature(hub):
+    from easyagent.build_recovery import assemble
+
+    class Builder:
+        async def generate(self, request, model):
+            return ModelResult(data={'edits': [{'op': 'set', 'path': ['answer'], 'value': 42}], 'done': True})
+
+    async def old_caller(args, ctx):
+        progress = {'segments': {'draft': {}, 'turns': 0}}
+        return await assemble(hub.build_capabilities, ctx, 'planner',
+            {'type': 'object', 'properties': {'answer': {'const': 42}}, 'required': ['answer']},
+            'Answer the task', {}, progress, lambda: hub.store.checkpoint(ctx.job, progress), None)
+
+    hub.models.register('planner', Builder(), 'fixture', ['decision'])
+    hub.tools.register(ToolSpec(name='test.old_caller'), old_caller)
+    run = await hub.wait(hub.submit({'name': 'old call shape', 'steps': [{'id': 'old', 'target': 'test.old_caller'}]}))
+    assert run['status'] == 'succeeded', run
+    assert run['steps'][0]['output'] == {'answer': 42}
+
+
+async def test_generated_runtime_type_error_is_fed_back_and_repaired(hub):
+    class Builder(CSVBuilder):
+        observed_type_error = False
+
+        async def generate(self, request, model):
+            if request.response_schema['title'] == 'BuildDraft':
+                content = json.loads(request.messages[-1]['content'])
+                if content.get('report'):
+                    self.observed_type_error = 'TypeError' in json.dumps(content['report'])
+            result = await super().generate(request, model)
+            code = result.data.get('code_candidate')
+            if code and code['manifest']['revision'] == 1:
+                code['files']['extension.js'] = 'function handle(r){const missing=null;return missing.call();}'
+            return result
+
+    provider = Builder()
+    hub.models.register('planner', provider, 'fixture', ['decision'])
+    body = assistant('Sum CSV amounts by customer.')
+    run = await hub.wait(start_build(hub, 'runtime-error', body)['id'])
+    assert run['status'] == 'succeeded', run
+    plan = build_status(hub, 'runtime-error', body)
+    assert plan['status'] == 'ready', plan
+    assert provider.observed_type_error
+    assert [r['passed'] for r in plan['development']] == [False, True]

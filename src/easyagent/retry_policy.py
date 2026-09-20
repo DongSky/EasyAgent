@@ -81,6 +81,12 @@ def error_info(exc):
     elif isinstance(exc, TimeoutError):
         category, retryable = "step_timeout", True
         message = "此步骤超过执行时限，已停止本次尝试。"
+    elif isinstance(exc, ValueError) and str(exc).startswith('run budget exceeded: '):
+        category, retryable = 'budget', False
+        name = str(exc).removeprefix('run budget exceeded: ')
+        label = {'model_calls': '模型调用次数', 'output_reserved': '总输出额度',
+                 'tool_calls': '工具调用次数', 'child_runs': '子流程次数'}.get(name, '运行额度')
+        message = f'任务的{label}已用尽，当前草稿和已完成步骤已保存。'
     else:
         category, retryable = "execution", False
         message = f"步骤执行失败（{kind}），请查看错误详情。"

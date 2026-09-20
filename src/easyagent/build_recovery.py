@@ -72,7 +72,7 @@ def validation_detail(exc):
     return str(exc)[:300]
 
 
-async def assemble(builder, ctx, model, schema, instruction, content, progress, save, check, tokens):
+async def assemble(builder, ctx, model, schema, instruction, content, progress, save, check, tokens=8192):
     state = progress['segments']
     if state.get('complete'):
         return state['draft']

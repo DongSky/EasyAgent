@@ -12,6 +12,7 @@ from .code_development import CodeScenario
 from .contracts import Contract, ModelRequest, ToolSpec
 from .http_tools import HTTPTool, export_definition
 from .models import HTTPProvider
+from .build_recovery import assemble
 from .store import encode
 
 
@@ -111,7 +112,6 @@ class BuildCapabilities:
 
     async def ask(self, ctx, model, schema, instruction, content, tokens=8192, check=None,
                   *, attempts=2, repair_state=None):
-        from .build_recovery import assemble
         from .retry_policy import ModelResponseError
         root = repair_state if repair_state is not None else ctx.job['state']
         key = hashlib.sha256(encode([model, schema, instruction, content, tokens]).encode()).hexdigest()
