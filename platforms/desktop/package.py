@@ -103,8 +103,15 @@ def main():
                 shutil.unpack_archive(archive, directory)
                 executable = directory / bundle / 'EasyAgent.exe'
             smoke(executable, directory, logs)
-    except BaseException:
+    except BaseException as exc:
         archive.unlink(missing_ok=True)  # Never upload an archive that failed its smoke check.
+        detail = f'{type(exc).__name__}: {exc}'
+        if (logs / 'smoke.log').exists():
+            detail += '\n' + (logs / 'smoke.log').read_text(encoding='utf-8', errors='replace')[-8000:]
+        print(detail, file=sys.stderr)
+        if os.environ.get('GITHUB_ACTIONS') == 'true':
+            escaped = detail.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+            print(f'::error title=Desktop smoke test failed::{escaped}')
         raise
     with archive.open('rb') as stream:
         checksum = hashlib.file_digest(stream, 'sha256').hexdigest()

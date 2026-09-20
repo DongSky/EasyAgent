@@ -16,6 +16,8 @@ jobs:
           node-version: '22'
       - uses: dtolnay/rust-toolchain@stable
       - run: uv sync --extra app --extra dev --python ${{ matrix.python }} --locked
+      - name: Install Chromium for browser integration tests
+        run: uv run --extra app --extra dev playwright install --with-deps chromium
       - run: uv run --extra app --extra dev ruff check src sdk/python/src apps tests examples
       - run: cargo build --locked --manifest-path sdk/rust/Cargo.toml --examples
       - run: uv run --extra app --extra dev pytest -q tests/integration
