@@ -207,7 +207,7 @@ class WorkspaceChat:
         key = 'workspace-chat:' + turn['id'] + ':' + phase
         if state.get('repair_attempt'):
             key += ':repair-' + str(state['repair_attempt'])
-        run_id = self.hub.submit(state['workflow'], key)
+        run_id = self.hub.submit(state['workflow'], key, execution=state['request'].get('execution', 'confirm'))
         state['phase'] = phase
         if run_id not in state['runs']:
             state['runs'].append(run_id)

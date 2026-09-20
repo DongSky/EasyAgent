@@ -186,13 +186,13 @@ class Hub:
             unavailable.update({"attachments.import_file", "attachments.export_file"})
         return [t for t in rows if t["name"] not in unavailable]
 
-    def submit(self, workflow: Workflow | dict, idempotency_key=None, parent=None, parent_job=None):
+    def submit(self, workflow: Workflow | dict, idempotency_key=None, parent=None, parent_job=None, *, execution='confirm'):
         workflow = self.prepare(workflow)
         if schema := workflow.metadata.get("component_input_schema"):
             from jsonschema import validate
 
             validate(workflow.inputs, schema)
-        return self.store.submit(workflow, idempotency_key, parent, parent_job)
+        return self.store.submit(workflow, idempotency_key, parent, parent_job, execution=execution)
 
     def prepare(self, workflow: Workflow | dict, *, _depth=0):
         """Validate and snapshot a workflow without creating or executing a run."""
@@ -379,6 +379,11 @@ class Hub:
         pulse = asyncio.create_task(self.heartbeat(job))
         try:
             timeout = job['spec']['timeout_seconds']
+            if (job['spec']['kind'] == 'tool' and
+                    self.tools.regeneratable_media(job['spec']['target'], job['spec'].get('tool_revision'))):
+                with self.store.connect() as db:
+                    if self.store.automatic(db, job['run_id']):
+                        timeout = None
             retry = job.get('retry_state', {})
             if 'step_timeout' in retry:
                 if retry['step_timeout'] is None:
@@ -444,6 +449,9 @@ class Hub:
                 info = error_info(exc)
                 fatal = fatal or info['category'] == 'configuration' or getattr(exc, 'retryable', None) is False
                 retry = not fatal and attempt < job["spec"]["max_attempts"]
+                if not fatal and not retry and self.tools.regeneratable_media(job['spec'].get('target', ''), job['spec'].get('tool_revision')):
+                    with self.store.connect() as db:
+                        retry = self.store.automatic(db, job['run_id'])
                 if not retry and job["spec"].get("compensate") and not job["state"].get("compensation"):
                     self.store.checkpoint(
                         job,
@@ -485,7 +493,11 @@ class Hub:
         spec = Step.model_validate(job["spec"])
         await self.extensions.dispatch("workflow.before_step", {"step": spec.model_dump()}, job=job)
         if attempt_number(job) > spec.max_attempts and not job["state"].get("compensation"):
-            raise ValueError("step recovery/attempt budget exhausted")
+            with self.store.connect() as db:
+                regenerate = (self.store.automatic(db, job['run_id'])
+                              and self.tools.regeneratable_media(spec.target, spec.tool_revision))
+            if not regenerate:
+                raise ValueError("step recovery/attempt budget exhausted")
         outputs = {
             s["id"]: s["output"] for s in self.store.run(job["run_id"])["steps"] if s["status"] == "succeeded"
         }
@@ -565,9 +577,14 @@ class Hub:
         if spec.kind == "goal":
             return await self.goals.execute(job, arguments)
         if spec.kind == "tool":
-            return await self.tools.invoke(
+            result = await self.tools.invoke(
                 self.store, job, spec.target, arguments, "step", spec.requires_approval
             )
+            if spec.target == 'backend.terminal' and isinstance(result, dict) and result.get('exit_code', 0) != 0:
+                self.store.checkpoint(job, {**job['state'], 'terminal_result': result})
+                raise ValueError('terminal command failed; exit_code=' + str(result['exit_code'])
+                                 + '; stderr=' + str(result.get('stderr', ''))[-1200:])
+            return result
         if spec.kind == "model":
             if spec.requires_approval:
                 await self.tools.invoke(

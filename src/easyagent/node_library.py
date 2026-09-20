@@ -381,7 +381,8 @@ class NodeLibrary:
         if ref.kind == 'api':
             step = Step(id=request.step_id, target=ref.id, tool_revision=ref.revision, input=arguments,
                         max_attempts=1 if manifest.effect == 'write' else 3,
-                        timeout_seconds=130 if ref.id == 'library.elevenlabs.speech' or ref.id.startswith('builtin_media.') else 90)
+                        timeout_seconds=None if self.hub.tools.regeneratable_media(ref.id, ref.revision) else
+                        130 if ref.id == 'library.elevenlabs.speech' or ref.id.startswith('builtin_media.') else 90)
         elif ref.kind == 'node':
             definition = NodeDefinition.model_validate(self.reference(ref.kind, ref.id, ref.revision)[1])
             step = definition.instantiate(request.step_id, arguments)

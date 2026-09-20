@@ -59,7 +59,7 @@ class HTTPTool(Contract):
     auth_prefix: str = "Bearer "
     effect: Literal["read", "write"] | None = None
     idempotent: bool = False
-    timeout_seconds: float = Field(default=30, gt=0, le=120)
+    timeout_seconds: float | None = Field(default=30, gt=0, le=120)
 
     @model_validator(mode="after")
     def valid(self):
@@ -274,7 +274,13 @@ def build_http_tool(definition, validate_arguments=None):
             return re.sub(r"(?i)(bearer\s+\S+|sk-[A-Za-z0-9_-]+|https?://\S+)", "[redacted]", value)[:limit]
 
         try:
-            async with httpx.AsyncClient(timeout=definition.timeout_seconds, follow_redirects=False, cookies=cookies) as client:
+            wait = definition.timeout_seconds
+            if context.store and definition.response_mode == 'media' and urlparse(definition.url).path.rstrip('/').endswith(('/images/generations', '/images/edits')):
+                with context.store.connect() as db:
+                    if context.store.automatic(db, context.run_id):
+                        wait = None
+            async with httpx.AsyncClient(timeout=httpx.Timeout(wait, connect=min(20, wait) if wait is not None else 20),
+                                         follow_redirects=False, cookies=cookies) as client:
                 transport['started'] = True
                 async with client.stream(definition.method, url, headers=headers, **kwargs) as response:
                     if context.store:
@@ -324,7 +330,15 @@ def build_http_tool(definition, validate_arguments=None):
                             raise ValueError("binary responses require nonempty content and a workflow invocation")
                         return Artifacts(context.store).put(definition.artifact_name, bytes(result), media_type, context.run_id)
                     if definition.response_mode == "media":
+                        # Persist the actual response before decoding/importing files. A local
+                        # processing error can then recover without paying for another generation.
+                        from .artifacts import Artifacts
                         from .media import media_result
+                        receipt = Artifacts(context.store).put('media-response.bin', bytes(result),
+                            response.headers.get('content-type', 'application/octet-stream').split(';')[0], context.run_id)
+                        with context.store.transaction() as db:
+                            db.execute('INSERT OR REPLACE INTO http_receipts VALUES(?,?,?)',
+                                (context.invocation_id, receipt['id'], response.headers.get('content-type', '')))
                         return media_result(bytes(result), response.headers.get("content-type", ""), context,
                                             definition.artifact_name)
                     if definition.response_mode == "text":
@@ -362,6 +376,15 @@ def build_http_tool(definition, validate_arguments=None):
             raise RuntimeError("configured API transport failed") from None
 
     async def call(arguments, context):
+        if definition.response_mode == 'media' and context.store:
+            with context.store.connect() as db:
+                receipt = db.execute('SELECT artifact_id,content_type FROM http_receipts WHERE invocation_id=?',
+                                     (context.invocation_id,)).fetchone()
+            if receipt:
+                from .artifacts import Artifacts
+                from .media import media_result
+                _, content = Artifacts(context.store).get(receipt['artifact_id'])
+                return media_result(content, receipt['content_type'], context, definition.artifact_name)
         transport = {'started': False}
         try:
             return await send(arguments, context, transport)

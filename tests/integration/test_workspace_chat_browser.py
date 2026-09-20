@@ -36,6 +36,7 @@ async def test_nested_wait_labels_show_the_actual_blocker(api):
         page = await browser.new_page()
         try:
             await page.goto(url+'/#conversations')
+            await page.locator('#conversations [data-execution]').select_option('confirm')
             await page.locator('#workspaceMessage').fill('运行嵌套流程')
             await page.locator('#conversations [data-send]').click()
             await expect(page.locator('[data-node="edit"] small')).to_have_text('子流程等待确认执行', timeout=15000)

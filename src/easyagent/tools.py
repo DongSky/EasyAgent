@@ -87,6 +87,22 @@ class ToolRegistry:
             raise TypeError("tool handlers must be async; use a process plugin for blocking code")
         self.entries[spec.name] = (spec, handler)
 
+    def regeneratable_media(self, name, revision=None):
+        """Only built-in synchronous image generation may repeat an uncertain paid call.
+
+        This is not an idempotency claim. Generic writes and video submissions keep
+        their receipts and reconciliation rules; model-authored adapters cannot opt in.
+        """
+        if not self.extensions or not name.startswith(('media.', 'builtin_media.')):
+            return False
+        from urllib.parse import urlsplit
+        try:
+            definition = self.extensions.hub.development.get('api', name, revision)['definition']
+        except KeyError:
+            return False
+        return (definition.get('method') == 'POST' and definition.get('response_mode') == 'media'
+                and urlsplit(definition['url']).path.rstrip('/').endswith(('/images/generations', '/images/edits')))
+
     def entry(self, name, revision=None):
         if self.refresh:
             self.refresh(name, revision)
@@ -152,7 +168,16 @@ class ToolRegistry:
         pause = None
         with store.transaction() as db:
             store.assert_owner(db, job)
+            automatic = store.automatic(db, job['run_id'])
             row = db.execute("SELECT * FROM invocations WHERE id=?", (invocation_id,)).fetchone()
+            if row and row['status'] in ('started', 'uncertain'):
+                receipt = db.execute('SELECT 1 FROM http_receipts WHERE invocation_id=?', (invocation_id,)).fetchone()
+                if receipt or (automatic and self.regeneratable_media(name, revision)):
+                    db.execute("UPDATE invocations SET status='failed' WHERE id=?", (invocation_id,))
+                    row = dict(row) | {'status': 'failed'}
+                    store.event(db, job['run_id'], 'media.recovery_started', {
+                        'invocation_id': invocation_id, 'reuse_response': bool(receipt),
+                        'possible_duplicate_generation': not bool(receipt)})
             if row and row["status"] == "succeeded":
                 return json.loads(row["output"])
             if row and row["status"] == "denied":
@@ -162,7 +187,7 @@ class ToolRegistry:
             elif row and row["status"] == "started" and spec.effect == "write" and not spec.idempotent:
                 db.execute("UPDATE invocations SET status='uncertain' WHERE id=?", (invocation_id,))
                 pause = UncertainEffect("a previous write may have completed: " + invocation_id)
-            elif (spec.effect == "write" or require_approval) and (not row or not row["approved"]):
+            elif (spec.effect == "write" or require_approval) and not automatic and (not row or not row["approved"]):
                 if not row:
                     store.reserve(db, job["run_id"], "tool_calls")
                     db.execute(
@@ -186,6 +211,9 @@ class ToolRegistry:
                         (invocation_id, job["run_id"], job["id"], name, arguments_json, revision),
                     )
                 if not row or row["status"] != "started":
+                    if automatic and (spec.effect == 'write' or require_approval):
+                        store.event(db, job['run_id'], 'tool.authorized',
+                                    {'tool': name, 'invocation_id': invocation_id, 'source': 'automatic_task'})
                     store.event(
                         db, job["run_id"], "tool.started", {"tool": name, "invocation_id": invocation_id}
                     )
@@ -238,7 +266,10 @@ class ToolRegistry:
                     pass  # Reporting cannot change the original side-effect classification.
             # Leave non-idempotent started calls unresolved on cancellation or crash.
             not_performed = isinstance(exc, (ToolPreparationError, ToolRejectedError))
-            if spec.effect == "write" and not spec.idempotent and not not_performed:
+            with store.connect() as db:
+                received = db.execute('SELECT 1 FROM http_receipts WHERE invocation_id=?', (invocation_id,)).fetchone()
+            regenerate = automatic and self.regeneratable_media(name, revision) and not isinstance(exc, asyncio.CancelledError)
+            if spec.effect == "write" and not spec.idempotent and not not_performed and not received and not regenerate:
                 if isinstance(exc, asyncio.CancelledError):
                     raise
                 with store.transaction() as db:
@@ -250,6 +281,10 @@ class ToolRegistry:
                 raise UncertainEffect("write failed after it started; verify the receipt") from exc
             with store.transaction() as db:
                 store.assert_owner(db, job)
+                if regenerate and not not_performed and not received:
+                    store.event(db, job['run_id'], 'media.regeneration_needed', {
+                        'invocation_id': invocation_id, 'error_type': type(exc).__name__,
+                        'receipt_available': False, 'possible_duplicate_generation': True})
                 db.execute(
                     "UPDATE invocations SET status='failed',error=? WHERE id=?",
                     (str(exc) if not_performed else type(exc).__name__, invocation_id),

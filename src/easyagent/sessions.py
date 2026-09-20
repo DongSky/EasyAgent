@@ -32,6 +32,7 @@ class ConversationInput(Contract):
     text: str = Field(default="", max_length=100000)
     attachments: list[str] = Field(default_factory=list, max_length=8)
     intent: Literal["auto", "create", "workflow", "chat"] = "auto"
+    execution: Literal['confirm', 'automatic'] = 'confirm'
     workflow: str | None = Field(default=None, max_length=160)
     mode: Literal["follow_up", "steer"] = "follow_up"
     idempotency_key: str = Field(default_factory=lambda: uuid.uuid4().hex, min_length=1, max_length=160)

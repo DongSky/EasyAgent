@@ -53,6 +53,10 @@ class Store:
                   id TEXT PRIMARY KEY, run_id TEXT NOT NULL, step_id TEXT NOT NULL,
                   tool TEXT NOT NULL, arguments TEXT NOT NULL, status TEXT NOT NULL,
                   approved INTEGER NOT NULL DEFAULT 0, output TEXT, error TEXT);
+                CREATE TABLE IF NOT EXISTS run_execution(
+                  run_id TEXT PRIMARY KEY REFERENCES runs(id), mode TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS http_receipts(
+                  invocation_id TEXT PRIMARY KEY, artifact_id TEXT NOT NULL, content_type TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS memory(
                   namespace TEXT NOT NULL,key TEXT NOT NULL,value TEXT NOT NULL,
                   source TEXT NOT NULL,updated REAL NOT NULL,PRIMARY KEY(namespace,key));
@@ -133,7 +137,9 @@ class Store:
         db.execute("INSERT INTO events(run_id,kind,payload,created) VALUES(?,?,?,?)",
                    (run_id, kind, encode(payload), time.time()))
 
-    def submit(self, workflow: Workflow, key=None, parent=None, parent_job=None):
+    def submit(self, workflow: Workflow, key=None, parent=None, parent_job=None, *, execution='confirm'):
+        if execution not in ('confirm', 'automatic'):
+            raise ValueError('unknown execution mode')
         spec = encode(workflow.model_dump())
         digest = hashlib.sha256(spec.encode()).hexdigest()
         with self.transaction() as db:
@@ -143,12 +149,16 @@ class Store:
             if old:
                 if old["digest"] != digest:
                     raise Conflict("idempotency key was used with a different workflow")
+                if not parent and self.automatic(db, old['id']) != (execution == 'automatic'):
+                    raise Conflict('idempotency key was used with a different execution mode')
                 return old["id"]
             run_id = uuid.uuid4().hex
             now = time.time()
             db.execute("INSERT INTO runs VALUES(?,?,?,?,?,?,?,?)",
                        (run_id, workflow.name, spec, "queued", now, now, key, digest))
             db.execute("INSERT INTO run_usage(run_id) VALUES(?)", (run_id,))
+            if not parent:
+                db.execute('INSERT INTO run_execution VALUES(?,?)', (run_id, execution))
             if parent:
                 parent_id, step_id, slot = parent
                 status = db.execute("SELECT status FROM runs WHERE id=?", (parent_id,)).fetchone()
@@ -162,6 +172,13 @@ class Store:
             self.event(db, run_id, "run.created", {"name": workflow.name})
         return run_id
 
+    def automatic(self, db, run_id):
+        # Authority comes from the operator's submission, never model-authored metadata.
+        row = db.execute('WITH RECURSIVE ancestors(id) AS (SELECT ? UNION ALL '
+            'SELECT c.parent_id FROM child_runs c JOIN ancestors a ON c.child_id=a.id) '
+            'SELECT e.mode FROM run_execution e JOIN ancestors a ON e.run_id=a.id LIMIT 1', (run_id,)).fetchone()
+        return bool(row and row[0] == 'automatic')
+
     def run(self, run_id):
         with self.connect() as db:
             row = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
@@ -169,6 +186,7 @@ class Store:
                 raise KeyError(run_id)
             result = dict(row)
             result["spec"] = json.loads(result["spec"])
+            result['execution'] = 'automatic' if self.automatic(db, run_id) else 'confirm'
             result["steps"] = [self.decode_step(s) for s in db.execute(
                 "SELECT * FROM steps WHERE run_id=? ORDER BY rowid", (run_id,))]
             result["approvals"] = [dict(a) | {"arguments": json.loads(a["arguments"])} for a in db.execute(

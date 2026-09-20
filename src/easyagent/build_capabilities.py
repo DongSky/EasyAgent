@@ -79,7 +79,7 @@ def prepare_connected_media(hub):
                 body_parameter='body', request_encoding='multipart' if mode == 'edits' else 'json',
                 max_upload_bytes=50_000_000 if mode == 'edits' else 10_000_000,
                 file_parameters=['image', 'mask'] if mode == 'edits' else [], response_mode='media',
-                max_response_bytes=10_000_000, timeout_seconds=120, effect='write', idempotent=False)
+                max_response_bytes=10_000_000, timeout_seconds=None, effect='write', idempotent=False)
             if provider.api_key:
                 credential = 'media.' + hashlib.sha256(alias.encode()).hexdigest()[:12]
                 hub.connections.put_secret(credential, provider.api_key)

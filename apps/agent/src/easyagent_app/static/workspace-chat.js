@@ -1,5 +1,5 @@
-import {stepStatus} from './run-status.js?v=20260921-wait-6';
-import {retryPanel,bindRetry} from './run-retry.js?v=20260921-wait-6';
+import {stepStatus} from './run-status.js?v=20260921-auto-7';
+import {retryPanel,bindRetry} from './run-retry.js?v=20260921-auto-7';
 import {modelChoices} from './model-choice.js';
 import {toolLabels} from './ui-labels.js';
 import {formatChat} from './chat-format.js';
@@ -12,7 +12,7 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
   <div class="chat-layout"><aside class="chat-history"><button class="chat-new" data-new>＋ 新对话</button><label class="chat-search"><span class="sr-only">搜索对话</span><input type="search" data-search placeholder="搜索对话"></label><div data-history></div></aside>
   <article class="chat-room"><header class="chat-room-heading"><div><span class="chat-presence"></span><strong data-title>新对话</strong></div><div class="chat-mobile-tools"><button class="small" data-history-toggle aria-expanded="false">历史</button><button class="small" data-new-mobile>＋ 新对话</button></div></header>
   <div class="chat-scroll" data-scroll><div data-welcome class="chat-welcome"><div class="chat-starters"><button data-starter="帮我整理这份通知，列出要做的事和截止日期。"><span>▤</span><b>整理材料</b><small>通知、文档、会议记录</small></button><button data-starter="帮我找到合适的已有流程，处理我上传的图片。"><span>◇</span><b>使用已有流程</b></button><button data-starter="帮我创建一个可以重复使用的流程：" data-create-starter><span>⌘</span><b>创建流程</b></button></div></div><div data-timeline></div></div>
-  <form class="chat-composer" data-compose><div class="chat-composer-top"><label><span class="sr-only">如何处理这条消息</span><select data-destination><option value="auto">✦ 自动安排</option><option value="create">＋ 创建新流程</option><option value="chat">仅对话</option></select></label><label class="chat-model-choice">模型<select data-model aria-label="处理模型"><option value="auto">自动选择已连接模型</option></select></label><span data-context>优先复用已有流程</span></div><div class="chat-attachments" data-files></div><label class="sr-only" for="workspaceMessage">你的需求</label><textarea id="workspaceMessage" data-text rows="3" placeholder="输入需求，或拖入附件"></textarea><div class="chat-composer-bottom"><button type="button" data-attach class="chat-attach" aria-label="添加图片、视频、音频或文档">＋ <span>添加附件</span></button><input type="file" multiple hidden data-file-input accept="image/*,audio/*,video/*,.pdf,.docx,.txt,.md,.csv,.json,.yaml,.yml"><span class="chat-compose-hint">Enter 发送 · Shift + Enter 换行</span><button type="button" data-stop class="small" hidden>停止本轮</button><button class="chat-send" data-send aria-label="发送需求">发送 <span aria-hidden="true">↑</span></button></div><p data-error class="chat-inline-error" role="alert" hidden></p></form><p class="chat-footnote" data-queue>附件会提交给所用服务；外部修改需确认。</p><div class="chat-drop-zone" data-drop hidden>松开添加附件<span>图片 · 视频 · 音频 · 文档</span></div></article></div>`;
+  <form class="chat-composer" data-compose><div class="chat-composer-top"><label><span class="sr-only">如何处理这条消息</span><select data-destination><option value="auto">✦ 自动安排</option><option value="create">＋ 创建新流程</option><option value="chat">仅对话</option></select></label><label class="chat-model-choice">模型<select data-model aria-label="处理模型"><option value="auto">自动选择已连接模型</option></select></label><label>执行方式<select data-execution aria-label="执行方式"><option value="automatic">自动执行</option><option value="confirm">逐项确认</option></select></label><span data-context>优先复用已有流程</span></div><div class="chat-attachments" data-files></div><label class="sr-only" for="workspaceMessage">你的需求</label><textarea id="workspaceMessage" data-text rows="3" placeholder="输入需求，或拖入附件"></textarea><div class="chat-composer-bottom"><button type="button" data-attach class="chat-attach" aria-label="添加图片、视频、音频或文档">＋ <span>添加附件</span></button><input type="file" multiple hidden data-file-input accept="image/*,audio/*,video/*,.pdf,.docx,.txt,.md,.csv,.json,.yaml,.yml"><span class="chat-compose-hint">Enter 发送 · Shift + Enter 换行</span><button type="button" data-stop class="small" hidden>停止本轮</button><button class="chat-send" data-send aria-label="发送需求">发送 <span aria-hidden="true">↑</span></button></div><p data-error class="chat-inline-error" role="alert" hidden></p></form><p class="chat-footnote" data-queue>自动执行已连接工具、Python 和媒体生成，可随时停止；服务无回执时，生图可能重新提交。</p><div class="chat-drop-zone" data-drop hidden>松开添加附件<span>图片 · 视频 · 音频 · 文档</span></div></article></div>`;
   document.querySelector('main').append(page);
   const $=s=>page.querySelector(s),guard=fn=>async e=>{try{await fn(e)}catch(error){$('[data-error]').textContent=error.message;$('[data-error]').hidden=false;flash(error.message);}};
   const floating=document.createElement('button');floating.className='chat-launcher';floating.innerHTML='<span aria-hidden="true">✦</span> 对话办事';floating.setAttribute('aria-label','打开对话办事入口');floating.onclick=()=>nav.click();document.body.append(floating);
@@ -25,6 +25,7 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
       if(id===selected){chosenModel=value;localStorage.setItem('easyagent.workspaceModel',value);signature='';}
     }finally{modelBusy=false;drawModel();drawFiles();}
   });
+  $('[data-execution]').onchange=()=>{$('[data-queue]').textContent=$('[data-execution]').value==='automatic'?'自动执行已连接工具、Python 和媒体生成，可随时停止；服务无回执时，生图可能重新提交。':'外部写操作会逐项请求确认。';};
   window.addEventListener('eah:connections-changed',()=>loadModels().catch(e=>flash(e.message)));
   const drafts=new Map(),cards=new Map(),runCache=new Map();
   const size=n=>n<1e6?Math.ceil(n/1000)+' KB':(n/1e6).toFixed(1)+' MB';
@@ -37,8 +38,8 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
   $('[data-history-toggle]').onclick=()=>{const opened=$('.chat-history').classList.toggle('mobile-open');$('[data-history-toggle]').setAttribute('aria-expanded',String(opened));};
   page.addEventListener('keydown',e=>{if(e.key==='Escape')closeHistory();});
   function clearCards(){for(const entry of cards.values()){stopWatch(entry.details);clearMedia(entry.media);}cards.clear();runCache.clear();$('[data-timeline]').replaceChildren();}
-  function persistDraft(){drafts.set(selected||'new',{text:$('[data-text]').value,files,destination:$('[data-destination]').value});}
-  function restoreDraft(){const draft=drafts.get(selected||'new')||{text:'',files:[],destination:'auto'};$('[data-text]').value=draft.text;files=draft.files;$('[data-destination]').value=draft.destination;drawFiles();}
+  function persistDraft(){drafts.set(selected||'new',{text:$('[data-text]').value,files,destination:$('[data-destination]').value,execution:$('[data-execution]').value});}
+  function restoreDraft(){const draft=drafts.get(selected||'new')||{text:'',files:[],destination:'auto'};$('[data-text]').value=draft.text;files=draft.files;$('[data-destination]').value=draft.destination;$('[data-execution]').value=draft.execution||'automatic';drawFiles();}
   function drawFiles(){
     $('[data-files]').innerHTML=files.map((f,i)=>`<div class="chat-file ${f.error?'has-error':''}"><span>${glyph(f.kind||f.type?.split('/')[0])}</span><div><b>${escape(f.name)}</b><small>${f.error?'上传失败 · 移除后可重新添加':f.id?size(f.size):'正在上传…'}</small></div><button type="button" data-remove="${i}" aria-label="移除 ${escape(f.name)}">×</button></div>`).join('');
     $('[data-files]').querySelectorAll('[data-remove]').forEach(b=>b.onclick=()=>{files.splice(Number(b.dataset.remove),1);drawFiles();});
@@ -81,7 +82,7 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
       if(!selected){const c=await api('/v1/conversations','POST',{workspace:true,model:chosenModel,title:(text||files[0]?.name||'新的对话').slice(0,60)});selected=c.id;localStorage.setItem('easyagent.workspaceConversation',selected);}
       const id=selected;
       // Retain the key on transport failure so retry cannot duplicate a model call or run.
-      const payload={text,attachments,intent:['auto','create','chat'].includes(destination)?destination:'workflow',...(!['auto','create','chat'].includes(destination)?{workflow:destination}:{})};
+      const payload={text,attachments,execution:$('[data-execution]').value,intent:['auto','create','chat'].includes(destination)?destination:'workflow',...(!['auto','create','chat'].includes(destination)?{workflow:destination}:{})};
       const fingerprint=JSON.stringify({id,...payload});if(send.fingerprint!==fingerprint){send.fingerprint=fingerprint;send.key=crypto.randomUUID();}
       await api(`/v1/conversations/${id}/messages`,'POST',{...payload,idempotency_key:send.key});
       if(id===selected){$('[data-text]').value='';files=[];drafts.delete('new');drafts.delete(id);drawFiles();await refresh();scrollEnd(true);}send.fingerprint=null;await listing();
@@ -196,7 +197,7 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
         }
       }
     }
-    $('[data-queue]').textContent=c.turns.some(t=>['queued','starting'].includes(t.status))?'后续消息排队中':'附件会提交给所用服务；外部修改需确认。';if(pinned)scrollEnd(true);
+    $('[data-queue]').textContent=c.turns.some(t=>['queued','starting'].includes(t.status))?'后续消息排队中':$('[data-execution]').value==='automatic'?'自动执行已连接工具、Python 和媒体生成，可随时停止；服务无回执时，生图可能重新提交。':'外部写操作会逐项请求确认。';if(pinned)scrollEnd(true);
   }
   async function downloadArtifact(a){const r=await fetch('/v1/artifacts/'+encodeURIComponent(a.id)+'/content',{headers:token()?{Authorization:'Bearer '+token()}:{}});if(!r.ok)throw Error('文件读取失败');download(await r.blob(),a.name);}
   async function refresh(){if(!selected||polling)return;polling=true;const id=selected;try{const c=await api('/v1/conversations/'+id);if(id!==selected)return;const next=JSON.stringify(c);if(next!==signature||c.active_run){signature=next;window.dispatchEvent(new CustomEvent('eah:conversation',{detail:{id:c.id}}));window.dispatchEvent(new CustomEvent('eah:message',{detail:{conversation:c.id,messages:c.messages}}));await paint(c);}}finally{polling=false;}}

@@ -62,7 +62,7 @@ class LocalExecution:
             "shell": "PowerShell" if os.name == "nt" else "/bin/sh",
             "python": "payload.python runs a Python script using the bundled interpreter; no system Python needed",
             "timeout_seconds": settings.timeout_seconds,
-            "permissions": "Commands run as the current OS user after workflow approval; workspace is not an OS sandbox.",
+            "permissions": "Commands run as the current OS user under the task execution mode; workspace is not an OS sandbox.",
         }
 
     async def configure(self, body):

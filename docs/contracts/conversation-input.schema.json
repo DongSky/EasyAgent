@@ -27,6 +27,15 @@
       "title": "Intent",
       "type": "string"
     },
+    "execution": {
+      "default": "confirm",
+      "enum": [
+        "confirm",
+        "automatic"
+      ],
+      "title": "Execution",
+      "type": "string"
+    },
     "workflow": {
       "anyOf": [
         {
