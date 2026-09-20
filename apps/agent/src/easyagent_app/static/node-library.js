@@ -8,19 +8,41 @@ export function nodeLibrary({api,$,escape,flash,guard,download,reload,add,token}
     'library.runway.cancel':'取消进行中的任务，或删除已完成任务及结果。',
     'library.elevenlabs.speech':'把文字转换为 MP3 并保存为可下载文件。需要声音 ID。'
   };
+  const mediaFields=document.createElement('div');mediaFields.hidden=true;
+  mediaFields.innerHTML='<label>使用已保存的服务连接<select name="connection" id="libraryMediaConnection"></select></label><label>该服务提供的模型 ID<input name="model" id="libraryMediaModel" placeholder="填写服务提供的准确模型 ID"></label><p class="muted">节点已内置；连接只绑定地址和凭证，不会生成媒体或上传文件。</p><button type="button" id="libraryAddConnection">添加模型服务连接</button>';
+  $('libraryConnectionForm').prepend(mediaFields);
+  const credentialLabel=$('libraryConnectionForm').elements.api_key.closest('label');
+  $('libraryAddConnection').onclick=()=>{$('libraryConnection').close();document.querySelector('[data-tab="connections"]').click();$('connectBtn').click();};
+  async function connect(row){
+    selected=row;mediaFields.hidden=!row.builtin_media;credentialLabel.hidden=!!row.builtin_media;
+    $('libraryConnectionTitle').textContent='连接 · '+row.title;$('libraryConnectionResult').textContent='';$('libraryConnectionForm').reset();
+    if(row.builtin_media){
+      const data=await api('/v1/studio/connections'),connections=data.connections.filter(m=>m.managed&&m.dialect!=='anthropic');
+      $('libraryMediaConnection').replaceChildren(...connections.map(m=>new Option(m.alias+' · '+m.model,m.alias)));
+      const usesModel=Object.hasOwn(row.defaults||row.manifest?.defaults||{},'model');
+      $('libraryMediaModel').closest('label').hidden=!usesModel;$('libraryMediaModel').required=usesModel;$('libraryMediaConnection').required=true;
+      function suggest(){const selected=connections.find(m=>m.alias===$('libraryMediaConnection').value);$('libraryMediaModel').value=usesModel?(row.id.includes('image_')&&selected?.capabilities.includes('image')?selected.model:(row.defaults||row.manifest?.defaults).model):'';}
+      $('libraryMediaConnection').onchange=suggest;suggest();
+      $('libraryConnectionInfo').textContent=(row.protocol||'媒体协议')+'：所选服务必须提供此协议。凭证沿用加密保存的连接。'+(connections.length?'':'请先添加一个服务连接，再回来绑定节点。');
+    }else{
+      $('libraryMediaConnection').required=false;$('libraryMediaModel').required=false;
+      $('libraryConnectionInfo').textContent='密钥仅保留在服务端内存。也可预先设置 '+row.credential_ref+'，重启后自动读取。';
+    }
+    $('libraryConnection').showModal();
+  }
   const componentType=r=>r.component_type||(r.manifest?.source.kind==='workflow'?'subworkflow':'node');
   const typeLabel=r=>componentType(r)==='subworkflow'?'子工作流':'节点';
   function render(){
     const query=$('librarySearch').value.toLowerCase();
-    $('nodeLibraryList').innerHTML=rows.filter(r=>!$('libraryType').value||componentType(r)===$('libraryType').value).filter(r=>(r.title+r.id+r.category).toLowerCase().includes(query)).map(r=>`<article class="library-card"><b>${escape(r.title)}</b><small>${typeLabel(r)} · ${escape(r.category)} · ${r.builtin?'内置节点':r.available?'已连接 · v'+r.manifest.revision:r.installed?'需要配置凭证':'待连接'}</small><p>${escape(descriptions[r.id]||r.description)}</p><small>${r.imported?'由文件导入 · 尚未在本机验证':r.manifest?.validation==='live_verified'?'真实服务已验证':r.manifest?.validation==='protocol_integration'?'协议集成测试通过 · 真实任务需单独验证':'可查看定义与验证范围'}</small><div class="actions"><button class="small ${r.available?'primary':''}" data-library-id="${escape(r.id)}">${r.available?'加入画布':r.installed?'查看连接要求':'连接服务'}</button>${r.docs?.[0]&&/^https?:\/\//.test(r.docs[0])?`<a href="${escape(r.docs[0])}" target="_blank" rel="noreferrer">接口文档 ↗</a>`:''}<button class="small" data-library-detail="${escape(r.id)}">定义</button>${r.installed||r.builtin?`<button class="small" data-package="${escape(r.id)}">导出组件包</button>`:''}</div></article>`).join('')||'<p class="muted">没有匹配的节点或子工作流。</p>';
+    $('nodeLibraryList').innerHTML=rows.filter(r=>!$('libraryType').value||componentType(r)===$('libraryType').value).filter(r=>(r.title+r.id+r.category).toLowerCase().includes(query)).map(r=>`<article class="library-card"><b>${escape(r.title)}</b><small>${typeLabel(r)} · ${escape(r.category)} · ${r.builtin_media?(r.available?'默认内置 · 已连接':'默认内置 · 待连接'):r.builtin?'内置节点':r.available?'已连接 · v'+r.manifest.revision:r.installed?'需要配置凭证':'待连接'}</small><p>${escape(descriptions[r.id]||r.description)}</p><small>${r.imported?'由文件导入 · 尚未在本机验证':r.manifest?.validation==='live_verified'?'真实服务已验证':r.manifest?.validation==='protocol_integration'?'协议集成测试通过 · 真实任务需单独验证':'可查看定义与验证范围'}</small><div class="actions"><button class="small ${r.available?'primary':''}" data-library-id="${escape(r.id)}">${r.available?'加入画布':r.builtin_media?'选择服务连接':r.installed?'查看连接要求':'连接服务'}</button>${r.builtin_media&&r.installed?`<button class="small" data-media-configure="${escape(r.id)}">修改连接</button>`:''}${r.docs?.[0]&&/^https?:\/\//.test(r.docs[0])?`<a href="${escape(r.docs[0])}" target="_blank" rel="noreferrer">接口文档 ↗</a>`:''}<button class="small" data-library-detail="${escape(r.id)}">定义</button>${r.installed||r.builtin?`<button class="small" data-package="${escape(r.id)}">导出组件包</button>`:''}</div></article>`).join('')||'<p class="muted">没有匹配的节点或子工作流。</p>';
     $('nodeLibraryList').querySelectorAll('[data-library-id]').forEach(b=>b.onclick=guard(async()=>{
       const row=rows.find(r=>r.id===b.dataset.libraryId);
       if(row.available){const result=await api('/v1/library/'+encodeURIComponent(row.id)+'/instantiate','POST',{revision:row.manifest?.revision});add(result.step);flash(typeLabel(row)+'已加入画布，可填写参数');return;}
+      if(row.builtin_media){await connect(row);return;}
       if(row.installed&&!row.credential_ref){flash(row.resolution.candidates.flatMap(c=>c.reasons).join('；')+'。请在服务端配置这些凭证。');return;}
-      selected=row;$('libraryConnectionTitle').textContent='连接 · '+row.title;
-      $('libraryConnectionInfo').textContent='密钥仅保留在服务端内存。也可预先设置 '+row.credential_ref+'，重启后自动读取。';
-      $('libraryConnectionResult').textContent='';$('libraryConnectionForm').reset();$('libraryConnection').showModal();
+      await connect(row);
     }));
+    $('nodeLibraryList').querySelectorAll('[data-media-configure]').forEach(b=>b.onclick=guard(()=>connect(rows.find(r=>r.id===b.dataset.mediaConfigure))));
     $('nodeLibraryList').querySelectorAll('[data-library-detail]').forEach(b=>b.onclick=()=>{
       const row=rows.find(r=>r.id===b.dataset.libraryDetail);
       download(new Blob([JSON.stringify(row.manifest||row.definition||row,null,2)],{type:'application/json'}),row.id+'.json');
@@ -38,8 +60,8 @@ export function nodeLibrary({api,$,escape,flash,guard,download,reload,add,token}
   $('libraryType').onchange=render;
   $('closeLibraryConnection').onclick=()=>$('libraryConnection').close();
   $('libraryConnectionForm').onsubmit=async e=>{
-    e.preventDefault();const button=e.target.querySelector('button');button.disabled=true;
-    try{await api('/v1/library/'+encodeURIComponent(selected.id)+'/install','POST',{api_key:new FormData(e.target).get('api_key')||''});e.target.reset();$('libraryConnection').close();await reload();flash('节点已加入库；配套流程列在“子工作流”中');}
+    e.preventDefault();const button=e.submitter||e.target.querySelector('button:not([type=button])');button.disabled=true;
+    try{await api('/v1/library/'+encodeURIComponent(selected.id)+'/install','POST',selected.builtin_media?{connection:$('libraryMediaConnection').value,model:$('libraryMediaModel').value||null}:{api_key:new FormData(e.target).get('api_key')||''});e.target.reset();$('libraryConnection').close();await reload();window.dispatchEvent(new Event('eah:connections-changed'));flash(selected.builtin_media?'默认媒体节点已连接；可加入画布或返回对话继续':'节点已加入库；配套流程列在“子工作流”中');}
     catch(error){$('libraryConnectionResult').textContent=error.message;}
     finally{button.disabled=false;}
   };
@@ -79,5 +101,5 @@ export function nodeLibrary({api,$,escape,flash,guard,download,reload,add,token}
     catch(error){$('componentPublishResult').textContent=error.message;}
     finally{button.disabled=false;}
   };
-  return {async refresh(){rows=await api('/v1/library');render();}};
+  return {async refresh(){rows=(await api('/v1/library')).sort((a,b)=>Number(!!b.builtin_media)-Number(!!a.builtin_media));render();}};
 }

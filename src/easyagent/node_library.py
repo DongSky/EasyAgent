@@ -31,6 +31,8 @@ class InstallRecipe(Contract):
     api_key: str = ''
     api_key_env: str | None = None
     endpoint: str | None = None
+    connection: str | None = None
+    model: str | None = None
 
 
 class SaveNode(Contract):
@@ -187,7 +189,17 @@ class NodeLibrary:
             _, body = self.reference(ref.kind, ref.id, ref.revision)
             if not matches_digest(body, ref.digest):
                 raise Conflict('component dependency digest mismatch: ' + ref.id)
-        return resolve_runtime(manifest.requirements, [self.profile(manifest)])
+        result = resolve_runtime(manifest.requirements, [self.profile(manifest)])
+        with self.hub.store.connect() as db:
+            revoked = any(db.execute("SELECT 1 FROM memory WHERE namespace='disabled-model-adapters' AND key=?",
+                                     (f'{ref.id}@{ref.revision}',)).fetchone()
+                          for ref in [manifest.source, *manifest.dependencies] if ref.kind == 'api')
+        if revoked:
+            result['selected'] = None
+            for candidate in result['candidates']:
+                candidate['compatible'] = False
+                candidate['reasons'].append('原模型连接已修改或删除，请重新连接节点')
+        return result
 
     def catalog(self):
         installed = {}
@@ -215,9 +227,18 @@ class NodeLibrary:
                 'component_type': 'node',
                 'description': '把任意结构化结果保存为带 SHA-256 的可下载文件。', 'category': '结果与回执',
                 'installed': False, 'available': True, 'builtin': True, 'docs': []}
+        from .default_media import definitions
+        for identifier, recipe in definitions().items():
+            if identifier in installed:
+                installed[identifier].update(builtin_media=True, category=recipe['category'], protocol=recipe['protocol'])
+            else:
+                installed[identifier] = {**recipe, 'installed': False, 'available': False}
         return list(installed.values())
 
     def install(self, identifier, options=None):
+        from .default_media import definitions, install
+        if identifier in definitions():
+            return install(self.hub, identifier, InstallRecipe.model_validate(options or {}))
         recipe = self.recipes[identifier]
         options = InstallRecipe.model_validate(options or {})
         try:
@@ -360,7 +381,7 @@ class NodeLibrary:
         if ref.kind == 'api':
             step = Step(id=request.step_id, target=ref.id, tool_revision=ref.revision, input=arguments,
                         max_attempts=1 if manifest.effect == 'write' else 3,
-                        timeout_seconds=130 if ref.id == 'library.elevenlabs.speech' else 90)
+                        timeout_seconds=130 if ref.id == 'library.elevenlabs.speech' or ref.id.startswith('builtin_media.') else 90)
         elif ref.kind == 'node':
             definition = NodeDefinition.model_validate(self.reference(ref.kind, ref.id, ref.revision)[1])
             step = definition.instantiate(request.step_id, arguments)

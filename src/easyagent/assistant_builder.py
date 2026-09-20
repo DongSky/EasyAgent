@@ -93,12 +93,15 @@ def start_build(hub, identifier, assistant):
     ]
     namespace_list = sorted({d["namespace"] for d in hub.knowledge.list()})
     namespace = code_namespace(identifier, assistant)
+    from .default_media import definitions as media_definitions
     code_revision = 1 + max((revision for name, revision in hub.extensions.packages if name == namespace), default=0)
     context = {
         "requirement": assistant["purpose"],
         "name": assistant["name"],
         "default_model": model,
         "available_tools": catalog,
+        "builtin_media_protocols": [{k: row[k] for k in ('id', 'title', 'path', 'capability', 'protocol', 'description')}
+                                    for row in media_definitions().values()],
         "models": [m for m in hub.models.catalog() if m["alias"] != "mock"],
         "skills": hub.skills.catalog(),
         "knowledge_namespaces": namespace_list,
@@ -120,6 +123,10 @@ def start_build(hub, identifier, assistant):
     instruction = """You compile requirements into an executable EasyAgent Workflow. Return only the requested JSON.
 Automatically select the necessary tools, skills, knowledge and models from the catalogs; do not ask novices to select them.
 The workflow must represent the ACTUAL steps and dependencies. External API calls must be explicit tool steps.
+Built-in media protocols are supported templates, not proof of connected access. Prefer matching available tools.
+When a matching media template needs connection, tell the user which default node to connect in the node library;
+do not ask for input/output schemas. Video submission and durable waiting are separate nodes; upload is optional
+and requires its documented upload endpoint. Never mistake a submitted task ID for a finished video.
 Never hide the whole task in one generic agent node. Agent nodes may select skills (fully loaded) or skill_access (on-demand), and may only use skills.read/skills.list tools; all other calls must be visible tool steps;
 model nodes perform individual transformations, extraction, drafting or analysis with no implicit tool calls.
 Use registered tool names and their exact input/output schemas. Never invent API capabilities, dates, secrets or successful receipts.

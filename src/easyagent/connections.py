@@ -127,6 +127,8 @@ class Connections:
     def assert_model_idle(self, alias):
         prefix = 'media.' + hashlib.sha256(alias.encode()).hexdigest()[:12]
         names = {alias, prefix + '.generations', prefix + '.edits'}
+        names.update(row['value']['api'] for row in self.store.memory_search('model-media-bindings', limit=10000)
+                     if row['value']['connection'] == alias)
 
         def uses(value):
             if isinstance(value, str):
@@ -163,6 +165,14 @@ class Connections:
                     self.store.memory_put('disabled-model-adapters', f"{name}@{version['revision']}", True, 'operator')
             except KeyError:
                 continue
+        for row in self.store.memory_search('model-media-bindings', limit=10000):
+            binding = row['value']
+            if binding['connection'] != alias:
+                continue
+            self.store.memory_put('disabled-model-adapters', row['key'], True, 'operator')
+            self.hub.development.set_archived('api', binding['api'], reason='模型连接已修改或删除')
+            with self.store.connect() as db:
+                db.execute('DELETE FROM vault WHERE name=?', (binding['credential'],))
 
     def save_model(self, body, provider, *, replace=False):
         from .models import ModelBinding

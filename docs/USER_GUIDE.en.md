@@ -241,6 +241,8 @@ Local browser/terminal execution is disabled by default. Configure allowed origi
 
 ## Images, video, and audio
 
+The node library includes five [default media nodes](DEFAULT_MEDIA_NODES.md): image generation, reference-image editing, video submission, durable video waiting, and reference-image upload. Select a saved service connection and its model ID to bind them; no schema authoring is required. Binding performs no generation or upload, and each service must support the displayed protocol. Video submission also configures its separate waiting node.
+
 1. Choose the exact model and operation in the model/API catalog; check its protocol and parameters.
 2. Bind your service credentials and add the operation to the node library/canvas. Synchronizing the catalog does not start generation.
 3. Enter the prompt and other fields. Reference-file inputs accept uploaded images or artifacts from the same Hub.

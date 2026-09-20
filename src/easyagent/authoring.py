@@ -33,6 +33,18 @@ def check_literals(value, schema, path="input"):
     """Schema-check literal fields without evaluating unresolved graph references."""
     if isinstance(value, dict) and set(value) == {"$ref"}:
         return
+    if isinstance(schema, dict) and (variants := schema.get('oneOf', schema.get('anyOf'))):
+        # A union may contain nested symbolic workflow inputs. Validate its literal
+        # discriminator and each candidate recursively; full oneOf validation still
+        # runs on resolved arguments before any tool invocation.
+        common = {k: v for k, v in schema.items() if k not in ('oneOf', 'anyOf')}
+        for variant in variants:
+            try:
+                check_literals(value, {**common, **variant}, path)
+                return
+            except (ValueError, ValidationError):
+                continue
+        raise ValueError(path + ': no supported input variant matches')
     if isinstance(value, dict) and isinstance(schema, dict) and schema.get("type") == "object":
         missing = set(schema.get("required", [])) - set(value)
         if missing:

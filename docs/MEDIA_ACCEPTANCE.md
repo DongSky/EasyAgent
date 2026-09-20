@@ -30,7 +30,7 @@
 
 证据目录为 `.eah/live-acceptance/seedance-debug-20260920/`。其中 `control-*` 是文字对照，`image-url-*` / `url-*` 是官方示例图片对照，`image-hosted-*` / `hosted-*` 是目标表情图动画。失败请求和对应运行均单独保留。
 
-已在本地保存可复用子工作流「图片生成动画 · 上传图片并等待视频」，并登记为 `library.seedance.image_animation`。输入是参考图片文件 ID、动作描述和时长，输出是生成回执与临时视频地址；不会固定使用本次角色。包含本机服务地址的原始分享包仅保留在忽略的 `output/` 中，不随仓库分发；新工作区请用[媒体示例](../examples/getting_started/media/README.md)和自己的配置构建。示例调用的上传接口返回 `result.Resp.img_url`，其他服务可配置自己的上传操作、文件字段和返回地址路径。
+已在本地保存可复用子工作流「图片生成动画 · 上传图片并等待视频」，并登记为 `library.seedance.image_animation`。输入是参考图片文件 ID、动作描述和时长，输出是生成回执与临时视频地址；不会固定使用本次角色。包含本机服务地址的原始分享包仅保留在忽略的 `output/` 中，不随仓库分发；新工作区现在可直接在能力库连接[默认媒体节点](DEFAULT_MEDIA_NODES.md)，也可用[媒体示例](../examples/getting_started/media/README.md)构建完整组合。示例调用的上传接口返回 `result.Resp.img_url`，其他服务可配置自己的上传操作、文件字段和返回地址路径。
 
 以下原始产物与提示词仅保留在本地 `output/`，不随仓库分发：
 

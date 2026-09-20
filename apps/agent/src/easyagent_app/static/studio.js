@@ -108,7 +108,7 @@ import { workflowSharing } from './workflow-sharing.js?v=20260920-nodes-1';
 const sharing=workflowSharing({api,$,escape,download,token:()=>token,flash,loadWorkflow,reload:loadBase,showTab});
 $('shareWorkflow').onclick=guard(()=>sharing.share(workflow()));
 const noCode=noCodeBuilder({api,$,escape,download,watch,loadWorkflow,showTab,listWorkflows,flash,token:()=>token,shareWorkflow:sharing.share});
-import { nodeLibrary } from './node-library.js?v=20260920-nodes-1';
+import { nodeLibrary } from './node-library.js?v=20260920-media-1';
 function addComponent(step){graph.flush();syncNodes();let n=1;while(nodes.some(x=>x.id==='component'+n))n++;step.id='component'+n;nodes.push(step);renderNodes();$('graphEditor').scrollIntoView({behavior:'smooth',block:'start'});}
 const library=nodeLibrary({api,$,escape,flash,guard,download,reload:loadBase,add:addComponent,token:()=>token});
 import { modelCatalog } from './model-catalog.js';
