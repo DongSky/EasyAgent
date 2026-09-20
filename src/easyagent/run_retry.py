@@ -145,10 +145,8 @@ def reset_failed_steps(db, run_id, longer_wait):
             retry.update(base_attempts=step['attempts'], manual_retries=retry.get('manual_retries', 0) + 1,
                          scheduled=False, attempt=0)
             if longer_wait:
-                retry['model_timeout'] = 300
-                timeout = json.loads(step['spec'])['timeout_seconds']
-                if timeout is not None:
-                    retry['step_timeout'] = min(3600, max(600, timeout * 2))
+                retry['model_timeout'] = None
+                retry['step_timeout'] = None
             db.execute("UPDATE steps SET status='queued',error=NULL,ready_at=0,owner=NULL,lease_until=NULL,retry_state=? "
                        'WHERE run_id=? AND id=?', (encode(retry), run_id, step['id']))
         elif step['status'] == 'skipped' and step['error'] == 'dependency failed':

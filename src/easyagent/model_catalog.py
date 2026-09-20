@@ -190,7 +190,7 @@ class ModelCatalog:
         key = os.environ.get(self.connection['api_key_env'])
         if not key:
             raise ValueError('missing model credential environment variable')
-        self.hub.models.register(alias, HTTPProvider(self.connection['base_url']+'/v1', key, dialect=dialect, timeout=120),
+        self.hub.models.register(alias, HTTPProvider(self.connection['base_url']+'/v1', key, dialect=dialect),
                                  request.model, ['chat', 'decision'])
         return {'alias': alias, 'model': request.model, 'dialect': dialect}
 

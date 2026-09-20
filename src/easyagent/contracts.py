@@ -62,7 +62,7 @@ class Step(Contract):
 
     @model_validator(mode="after")
     def reference_kind(self):
-        if self.kind == 'agent' and 'timeout_seconds' not in self.model_fields_set:
+        if self.kind in ('model', 'agent') and 'timeout_seconds' not in self.model_fields_set:
             self.timeout_seconds = None
         if self.workflow_ref and self.kind not in ("subworkflow", "foreach"):
             raise ValueError("workflow_ref requires a subworkflow or foreach step")

@@ -14,6 +14,85 @@ from easyagent.run_retry import RetryRequest, retry_run
 from easyagent.store import Conflict, Store
 
 
+@pytest.mark.parametrize('streaming', [False, True])
+async def test_default_model_wait_has_no_read_deadline_and_can_be_cancelled(hub, monkeypatch, streaming):
+    from fastapi.responses import StreamingResponse
+    from easyagent.contracts import Step
+    from easyagent.retry_policy import MODEL_WAIT, model_timeout
+    remote = FastAPI()
+    entered, release, disconnected = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    hub.lease_seconds = .3
+    seen = []
+    client_type = httpx.AsyncClient
+
+    class InspectClient(client_type):
+        async def send(self, request, **kwargs):
+            if request.method == 'POST':
+                seen.append(request.extensions['timeout'])
+            return await super().send(request, **kwargs)
+
+    monkeypatch.setattr(httpx, 'AsyncClient', InspectClient)
+
+    @remote.post('/chat/completions')
+    async def reply():
+        async def chunks():
+            entered.set()
+            try:
+                await release.wait()
+                if streaming:
+                    yield 'data: '+json.dumps({'choices': [{'delta': {'content': 'done'}, 'finish_reason': 'stop'}]})+'\n\n'
+                    yield 'data: [DONE]\n\n'
+                else:
+                    yield json.dumps({'choices': [{'message': {'content': 'done'}, 'finish_reason': 'stop'}]})
+            finally:
+                disconnected.set()
+        return StreamingResponse(chunks(), media_type='text/event-stream' if streaming else 'application/json')
+
+    assert Step(id='model', kind='model').timeout_seconds is None
+    assert Step(id='model', kind='model', timeout_seconds=15).timeout_seconds == 15
+    token = MODEL_WAIT.set((3, {'model_timeout': 300}))
+    try:
+        assert model_timeout(None) is None  # Legacy retries must not reinstate a deadline.
+    finally:
+        MODEL_WAIT.reset(token)
+    async with live_server(remote) as endpoint:
+        hub.models.register('planner', HTTPProvider(endpoint), 'fixture', ['chat'])
+        run_id = hub.submit({'name': 'unlimited cancellable response', 'steps': [
+            {'id': 'wait', 'kind': 'model', 'target': 'planner', 'input': {'prompt': 'test', 'parameters': {'stream': streaming}}}]})
+        await asyncio.wait_for(entered.wait(), 5)
+        await asyncio.sleep(.15)
+        assert hub.store.run(run_id)['status'] == 'running'
+        assert seen[-1]['read'] is None and seen[-1]['write'] is None
+        assert seen[-1]['connect'] == 20
+        hub.store.cancel(run_id)
+        assert (await hub.wait(run_id))['status'] == 'cancelled'
+        await asyncio.wait_for(disconnected.wait(), 3)
+        release.set()
+
+
+async def test_continuous_wait_retry_removes_explicit_read_and_step_timeouts(hub):
+    remote = FastAPI()
+    calls = []
+
+    @remote.post('/chat/completions')
+    async def reply():
+        calls.append(True)
+        await asyncio.sleep(.1)
+        return {'choices': [{'message': {'content': 'completed'}}]}
+
+    async with live_server(remote) as endpoint:
+        hub.models.register('planner', HTTPProvider(endpoint, timeout=.02), 'fixture', ['chat'])
+        failed = await hub.wait(hub.submit({'name': 'explicit timeout', 'steps': [
+            {'id': 'wait', 'kind': 'model', 'target': 'planner', 'max_attempts': 1, 'timeout_seconds': .08,
+             'input': {'prompt': 'test'}}]}))
+        assert failed['status'] == 'failed' and failed['retry']['longer_wait']
+        await retry_run(hub, failed['id'], RetryRequest(expected_updated=failed['updated'], longer_wait=True))
+        result = await hub.wait(failed['id'])
+        assert result['status'] == 'succeeded', result
+        assert result['steps'][0]['output']['text'] == 'completed'
+        assert len(calls) == 2
+
+
 async def test_http_model_timeout_adapts_and_diagnostics_are_safe(hub, monkeypatch):
     monkeypatch.setattr('easyagent.runtime.retry_delay', lambda info, attempt: .01)
     app = FastAPI()
@@ -139,7 +218,7 @@ async def test_manual_retry_keeps_receipts_checkpoint_budget_and_skipped_conditi
     assert completed['usage']['tool_calls'] >= usage
     failed_step = next(s for s in completed['steps'] if s['id'] == 'verify')
     assert failed_step['attempts'] == 2 and failed_step['retry_state']['base_attempts'] == 1
-    assert failed_step['retry_state']['model_timeout'] == 300
+    assert failed_step['retry_state']['model_timeout'] is None
     assert next(s for s in completed['steps'] if s['id'] == 'conditional')['status'] == 'skipped'
     reopened = Store(hub.store.path).run(run['id'])
     assert reopened['steps'] == completed['steps']
@@ -233,7 +312,7 @@ async def test_browser_retry_button_resumes_same_chat_and_refreshes_cached_failu
     async def work(args, ctx):
         if not ready:
             raise httpx.ReadTimeout('timeout')
-        assert ctx.job['retry_state']['model_timeout'] == 300
+        assert ctx.job['retry_state']['model_timeout'] is None
         entered.set()
         await release.wait()
         return {'text': '重试成功，沿用原任务。'}
@@ -264,7 +343,7 @@ async def test_browser_retry_button_resumes_same_chat_and_refreshes_cached_failu
             await card.get_by_role('button', name='展开步骤与结果').click()
             await expect(card.get_by_text('远程服务响应超时（等待返回数据超过时限）', exact=True)).to_be_visible()
             ready = True
-            await card.locator('[data-retry]').get_by_role('button', name='延长等待重试').click()
+            await card.locator('[data-retry]').get_by_role('button', name='持续等待重试').click()
             await asyncio.wait_for(entered.wait(), 5)
             await expect(card.locator('[data-retry-run]')).to_have_count(0)
             release.set()
@@ -399,7 +478,7 @@ async def test_retried_build_graph_animates_without_replacing_nodes(api, monkeyp
 
             await page.route('**/v1/runs/*/retry', delay_retry)
             ready = True
-            await card.locator('[data-retry]').get_by_role('button', name='延长等待重试').click()
+            await card.locator('[data-retry]').get_by_role('button', name='持续等待重试').click()
             await asyncio.wait_for(request_seen.wait(), 5)
             await expect(card.locator('[aria-busy="true"]')).to_have_text('正在提交重试…')
             await expect(card.locator('.retry-request-spinner')).to_have_css('animation-name', 'chatSpin')

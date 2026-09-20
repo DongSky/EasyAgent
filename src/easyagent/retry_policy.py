@@ -6,7 +6,7 @@ import random
 
 import httpx
 
-MODEL_WAIT = ContextVar("easyagent_model_wait", default=(1, None))
+MODEL_WAIT = ContextVar("easyagent_model_wait", default=(1, {}))
 
 
 class ModelResponseError(RuntimeError):
@@ -37,8 +37,11 @@ def attempt_number(job):
 
 
 def model_timeout(default):
-    attempt, override = MODEL_WAIT.get()
-    return max(default, min(300, override or default * min(2.5, 1 + .5 * (attempt - 1))))
+    attempt, retry = MODEL_WAIT.get()
+    # A retry must not turn an unlimited connection into a finite 120/300-second wait.
+    if default is None or ('model_timeout' in retry and retry['model_timeout'] is None):
+        return None
+    return max(default, retry.get('model_timeout') or default * min(2.5, 1 + .5 * (attempt - 1)))
 
 
 def error_info(exc):

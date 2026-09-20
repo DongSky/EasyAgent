@@ -99,8 +99,8 @@ class MockProvider:
 
 
 class HTTPProvider:
-    """Provider adapters with bounded time and response bytes; keys never enter workflow state."""
-    def __init__(self, base_url, api_key="", dialect="chat", timeout=120, max_bytes=16_000_000):
+    """Provider adapters with cancellable waits; keys never enter workflow state."""
+    def __init__(self, base_url, api_key="", dialect="chat", timeout=None, max_bytes=16_000_000):
         if dialect not in ("chat", "responses", "anthropic"):
             raise ValueError("dialect must be chat, responses or anthropic")
         self.base_url = base_url.rstrip("/")
@@ -133,7 +133,8 @@ class HTTPProvider:
             headers.update({"x-api-key": self.api_key, "anthropic-version": "2023-06-01"})
         elif self.api_key:
             headers["authorization"] = "Bearer " + self.api_key
-        async with httpx.AsyncClient(timeout=httpx.Timeout(wait, connect=min(20, wait), pool=min(20, wait))) as client:
+        connection_wait = min(20, wait) if wait is not None else 20
+        async with httpx.AsyncClient(timeout=httpx.Timeout(wait, connect=connection_wait, pool=connection_wait)) as client:
             async with client.stream("POST", self.base_url + path, json=payload, headers=headers) as response:
                 if response.status_code >= 400:
                     if response.status_code in (400, 413):

@@ -379,8 +379,12 @@ class Hub:
         pulse = asyncio.create_task(self.heartbeat(job))
         try:
             timeout = job['spec']['timeout_seconds']
-            if timeout is not None:
-                timeout = max(timeout, job.get('retry_state', {}).get('step_timeout', 0))
+            retry = job.get('retry_state', {})
+            if 'step_timeout' in retry:
+                if retry['step_timeout'] is None:
+                    timeout = None
+                elif timeout is not None:
+                    timeout = max(timeout, retry['step_timeout'])
             async with asyncio.timeout(timeout):
                 done, _ = await asyncio.wait({work, pulse}, return_when=asyncio.FIRST_COMPLETED)
                 if pulse in done:
@@ -882,7 +886,7 @@ class Hub:
                     "stream", False
                 )
                 observer = MODEL_OBSERVER.set(observe if streaming else None)
-                wait_settings = MODEL_WAIT.set((attempt_number(job), job.get('retry_state', {}).get('model_timeout')))
+                wait_settings = MODEL_WAIT.set((attempt_number(job), job.get('retry_state', {})))
                 try:
                     result = await self.models.generate(effective, binding=binding)
                 finally:

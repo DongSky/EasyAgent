@@ -276,7 +276,7 @@ Respond in the user's language. title is only used if creating a new workflow. F
             return self.finish(turn, state, 'succeeded', '本次材料与流程目录较大，请先指定一个流程，或把需求和材料拆成几次提交。尚未调用模型或执行业务步骤。')
         flow = {'name': '理解需求与匹配流程', 'metadata': {'workspace_conversation': conversation['id'], 'workspace_turn': turn['id'], 'step_labels': {'route': '理解需求 · 匹配已有流程'}},
                 'limits': {'model_calls': 1, 'tool_calls': 0, 'output_tokens': 4096},
-                'steps': [{'id': 'route', 'kind': 'model', 'target': model, 'max_attempts': 1, 'timeout_seconds': 120,
+                'steps': [{'id': 'route', 'kind': 'model', 'target': model, 'max_attempts': 1, 'timeout_seconds': None,
                            'input': {'capability': 'decision', 'max_output_tokens': 4096, 'response_schema': DispatchDecision.model_json_schema(), 'messages': [{'role': 'system', 'content': instruction}, {'role': 'user', 'content': context_json}]}}]}
         state['message'] = '正在理解需求，查找可复用的流程…'
         self.start_run(turn, state, 'routing', flow)

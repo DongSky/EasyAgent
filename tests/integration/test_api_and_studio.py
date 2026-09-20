@@ -12,6 +12,28 @@ from easyagent_app import mount_app
 from conftest import live_server
 
 
+async def test_workflow_editor_preserves_unlimited_model_wait(api):
+    from playwright.async_api import async_playwright, expect
+    url, hub = api
+    hub.development.save_workflow('unlimited-model', {'name': '持续等待模型', 'steps': [
+        {'id': 'wait', 'kind': 'model', 'target': 'mock', 'timeout_seconds': None,
+         'input': {'prompt': 'hello'}}]}, 0)
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch()
+        try:
+            page = await browser.new_page()
+            await page.goto(url+'/#home')
+            await page.locator('[data-collection="workflows"]').click()
+            await page.locator('[data-workflow="unlimited-model"]').click()
+            await expect(page.locator('#nodes [name=timeout]')).to_have_value('')
+            async with page.expect_response(lambda r: '/v1/studio/workflows/unlimited-model?' in r.url and r.request.method == 'PUT') as response:
+                await page.locator('#saveWorkflow').click()
+            saved = await (await response.value).json()
+            assert saved['workflow']['steps'][0]['timeout_seconds'] is None
+        finally:
+            await browser.close()
+
+
 async def test_http_sdk_sse_errors_and_cancel(api):
     url, hub = api
     async with HubClient(url) as client:

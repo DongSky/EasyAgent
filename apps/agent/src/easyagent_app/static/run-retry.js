@@ -2,7 +2,7 @@ export function retryPanel(run,escape){
   if(run.status!=='failed'&&!run.retry?.verification_failure)return '';
   const retry=run.retry;
   if(!retry?.allowed)return `<p class="muted">${escape(retry?.reason||'请先查看失败原因。')}</p>`;
-  return `<div class="notice run-retry"><p>已保留 ${retry.preserved_steps} 个完成步骤及已有附件，从失败处继续。</p>${retry.build_budget_upgrade?'<p class="muted">继续时会移除旧版系统添加的构建次数和总输出限制，保留已有草稿与执行记录。</p>':''}<div class="actions"><button data-retry-run>从失败处重试</button>${retry.longer_wait?'<button data-retry-run="longer">延长等待重试</button>':''}</div>${retry.longer_wait?'<p class="muted">延长等待：模型响应最多等待 300 秒；本次步骤至少预留 600 秒。仍受任务总预算限制。</p>':''}<p data-retry-error role="alert" hidden></p></div>`;
+  return `<div class="notice run-retry"><p>已保留 ${retry.preserved_steps} 个完成步骤及已有附件，从失败处继续。</p>${retry.build_budget_upgrade?'<p class="muted">继续时会移除旧版系统添加的构建次数和总输出限制，保留已有草稿与执行记录。</p>':''}<div class="actions"><button data-retry-run>从失败处重试</button>${retry.longer_wait?'<button data-retry-run="longer">持续等待重试</button>':''}</div>${retry.longer_wait?'<p class="muted">持续等待：取消本次模型读取和步骤执行时限，可随时停止。你主动设置的任务总时限仍然生效。</p>':''}<p data-retry-error role="alert" hidden></p></div>`;
 }
 
 export function bindRetry(root,run,{api,onRetry}){

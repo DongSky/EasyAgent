@@ -123,7 +123,7 @@ def install_authoring(app, hub, *, enable_generation=False):
                    "current_workflow": body.current.model_dump() if body.current else None}
         identifier = hub.submit({"name": "自然语言生成工作流", "metadata": {"authoring": True, "allowed_tools": body.tools},
             "limits": {"model_calls": 1, "tool_calls": 0, "output_tokens": 8192}, "steps": [{
-                "id": "draft", "kind": "model", "target": body.model, "max_attempts": 1, "timeout_seconds": 120,
+                "id": "draft", "kind": "model", "target": body.model, "max_attempts": 1, "timeout_seconds": None,
                 "input": {"capability": "decision", "max_output_tokens": 8192,
                     "messages": [{"role": "system", "content": instruction}, {"role": "user", "content": json.dumps(context, ensure_ascii=False)}],
                     "response_schema": Draft.model_json_schema()}}]})
