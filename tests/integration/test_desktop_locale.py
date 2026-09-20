@@ -20,7 +20,7 @@ async def test_catalog_and_extension_files_ignore_legacy_system_encoding(tmp_pat
     source = tmp_path / 'unicode-extension'
     source.mkdir()
     manifest = {'id': 'locale_check', 'revision': 1, 'title': '中文节点',
-                'tools': [{'handler': 'echo', 'spec': {'name': 'locale.echo', 'description': '返回中文'}}]}
+                'tools': [{'handler': 'echo', 'spec': {'name': 'locale_check.echo', 'description': '返回中文'}}]}
     (source / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False), encoding='utf-8')
     (source / 'sources.json').write_text('["extension.js"]', encoding='utf-8')
     (source / 'extension.js').write_text('function handle(r) { return {result: {text: "运行成功"}}; }',
@@ -35,7 +35,7 @@ async def test_catalog_and_extension_files_ignore_legacy_system_encoding(tmp_pat
         # Repeated materialization exercises UTF-8 comparison against an existing source file.
         assert hub.extensions.materialize(package) == hub.extensions.materialize(package)
         run = await hub.wait(hub.submit({'name': '中文测试', 'steps': [
-            {'id': 'echo', 'target': 'locale.echo'},
+            {'id': 'echo', 'target': 'locale_check.echo'},
         ]}))
         assert run['status'] == 'succeeded'
         assert run['steps'][0]['output'] == {'text': '运行成功'}
