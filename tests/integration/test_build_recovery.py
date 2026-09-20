@@ -349,3 +349,51 @@ async def test_schema_upgrade_resumes_legacy_segment_without_replanning(hub):
     run = await hub.wait(hub.submit({'name': 'upgraded schema', 'steps': [{'id': 'resume', 'target': 'test.resume_schema'}]}))
     assert run['status'] == 'succeeded', run
     assert observed == ['saved-step'] and run['usage']['model_calls'] == 1
+
+
+@pytest.mark.parametrize('interrupt_repair', [False, True])
+async def test_legacy_validation_failure_resumes_existing_graph_and_rechecks_it(hub, monkeypatch, interrupt_repair):
+    monkeypatch.setattr('easyagent.runtime.retry_delay', lambda info, attempt: .01)
+    calls = []
+    draft = {'workflow': {'name': 'validated', 'steps': [
+        {'id': 'work', 'target': 'test.schema', 'input': {'value': 'correct'}}]}, 'explanation': 'validate inputs'}
+
+    class Builder:
+        async def generate(self, request, model):
+            calls.append(request.response_schema['title'])
+            if calls[-1] == 'BuildDraft':
+                return ModelResult(data=draft)
+            context = json.loads(request.messages[-1]['content'])
+            assert context['draft']['workflow']['steps'][0]['input']['value'] == 12
+            if interrupt_repair and len(calls) == 2:
+                raise httpx.ReadTimeout('interrupted verification repair')
+            return ModelResult(data={'edits': [{'op': 'set', 'path': ['workflow', 'steps', 0, 'input', 'value'],
+                                              'value': 'correct'}], 'done': True})
+
+    async def echo(args, ctx):
+        return args
+
+    hub.tools.register(ToolSpec(name='test.schema', input_schema={
+        'type': 'object', 'properties': {'value': {'type': 'string'}}, 'required': ['value']}), echo)
+    hub.models.register('planner', Builder(), 'fixture', ['decision'])
+    body = assistant('validate the graph')
+    original = await hub.wait(start_build(hub, 'legacy-verification', body)['id'])
+    bad = json.loads(json.dumps(draft))
+    bad['workflow']['steps'][0]['input']['value'] = 12
+    state = original['steps'][1]['state'] | {'draft': bad}
+    with hub.store.transaction() as db:
+        db.execute('UPDATE steps SET state=?,output=? WHERE run_id=? AND id=?', (
+            encode(state), encode({'draft': bad, 'errors': ['old validation failure']}), original['id'], 'verify'))
+    invalid = hub.store.run(original['id'])
+    assert invalid['retry']['allowed'] and invalid['retry']['verification_failure']
+    assert invalid['retry']['preserved_steps'] == 1
+    with hub.store.connect() as db:
+        compiled = dict(db.execute("SELECT * FROM invocations WHERE run_id=? AND step_id='compile'", (original['id'],)).fetchone())
+    await retry_run(hub, original['id'], RetryRequest(expected_updated=invalid['updated']))
+    result = await hub.wait(original['id'])
+    assert result['status'] == 'succeeded', result
+    assert calls == ['BuildDraft', *(['BuildEdits'] * (2 if interrupt_repair else 1))]
+    assert result['steps'][0]['attempts'] == 1
+    with hub.store.connect() as db:
+        assert dict(db.execute('SELECT * FROM invocations WHERE id=?', (compiled['id'],)).fetchone()) == compiled
+    assert build_status(hub, 'legacy-verification', body)['status'] == 'ready'

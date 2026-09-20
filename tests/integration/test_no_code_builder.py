@@ -112,7 +112,7 @@ async def test_builder_missing_capability_invalid_plan_and_write_approval(api):
         input_schema={"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}), write)
     async with live_server(remote) as origin, httpx.AsyncClient(base_url=url) as client:
         hub.models.register("planner", HTTPProvider(origin), "fixture", ["chat", "decision"])
-        saved=(await client.post('/v1/studio/assistants', json={"name":"OCR","purpose":"处理图片", "construction":"automatic","model":"auto"})).json()
+        saved=(await client.post('/v1/studio/assistants', json={"name":"OCR","purpose":"处理图片", "construction":"automatic","model":"auto", "limits":{"model_calls":3}})).json()
         path='/v1/studio/assistants/'+saved['id']
         async def build():
             submitted=await client.post(path+'/build')
@@ -124,11 +124,13 @@ async def test_builder_missing_capability_invalid_plan_and_write_approval(api):
         assert missing['status']=='clarification' and missing['questions']
         assert (await client.get(path+'/export')).status_code==409
         drafts[0]={"workflow":{"name":"hidden work","steps":[{"id":"hidden","kind":"agent","target":"planner","input":{"prompt":"do everything", "tools":["business.write"]}}]},"explanation":"hidden","questions":[]}
-        assert (await build())['status']=='invalid'
+        assert (await build())['status']=='failed'
         assert not effects
         drafts[0]={"workflow":{"name":"bad literal","steps":[{"id":"write","target":"business.write","input":{"value":12}}]},"explanation":"invalid parameter","questions":[]}
         invalid=await build()
-        assert invalid['status']=='invalid' and 'string' in invalid['errors'][0]
+        assert invalid['status']=='failed'
+        assert any(e['kind']=='build.verification_repair' and 'string' in json.dumps(e['payload'])
+                   for e in hub.store.events(invalid['build_id']))
         assert (await client.get(path+'/export')).status_code==409
         drafts[0]={"workflow":{"name":"explicit write","steps":[{"id":"write","target":"business.write","input":{"value":{"$ref":"$input.message"}}}]},"explanation":"可见的写节点，需要确认","questions":[]}
         assert (await build())['status']=='ready'

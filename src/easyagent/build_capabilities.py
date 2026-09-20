@@ -103,7 +103,7 @@ class BuildCapabilities:
             effect='local', idempotent=True), self.verify)
         hub.tools.internal_names.add('development.verify_build')
         hub.tools.register(ToolSpec(name='development.compile_build',
-            description='Internal task planner with bounded structured-output repair.',
+            description='Internal task planner with durable structured-output repair.',
             effect='local', idempotent=True), self.compile)
         hub.tools.internal_names.add('development.compile_build')
 
@@ -194,6 +194,33 @@ class BuildCapabilities:
         return {'data': state['draft']}
 
     async def verify(self, args, ctx):
+        from .assistant_builder import BuildDraft
+        while True:
+            result = await self.verify_once(args, ctx)
+            if not result.get('errors'):
+                return result
+            state = ctx.job['state']
+            run = self.hub.store.run(ctx.run_id)
+            original = run['spec']['steps'][0]['input']['messages']
+            content = json.loads(original[-1]['content'])
+            content['research_evidence'] = state.get('evidence', [])
+            content['validation_errors'] = result['errors']
+            progress = state.setdefault('verification_repair', {'segments': {
+                'draft': result['draft'], 'turns': 0, 'feedback': 'Validation failed: ' + encode(result['errors'])}})
+            with self.hub.store.transaction() as db:
+                self.hub.store.event(db, ctx.run_id, 'build.verification_repair',
+                    {'step': ctx.step_id, 'errors': result['errors']})
+            corrected = await assemble(self, ctx, args['model'], BuildDraft.model_json_schema(),
+                original[0]['content'] + '\nRepair the existing draft using actual validation errors. '
+                'Preserve completed work and tested contracts. Generated APIs must have empty headers, '
+                'api_key and api_key_env; credentials are bound locally via the connected service alias. '
+                'Never invent authorization, skip validation or request tool schemas from the user. '
+                'If a real service connection is missing, state that specific requirement.',
+                content, progress, lambda: self.hub.store.checkpoint(ctx.job, state), BuildDraft.model_validate)
+            state.pop('verification_repair', None)
+            self.checkpoint(ctx, state, draft=corrected, api_tools=[])
+
+    async def verify_once(self, args, ctx):
         from .assistant_builder import BuildDraft, code_namespace, stored, validate_compiled
         if not ctx.job.get('spec') or self.hub.store.run(ctx.run_id)['spec']['metadata'].get('assistant_builder') != args['assistant_id']:
             raise PermissionError('verification belongs to a task build')
@@ -242,6 +269,11 @@ class BuildCapabilities:
             except (ValueError, KeyError, PermissionError, ValidationError, SchemaError) as exc:
                 return {'draft': draft.model_dump(), 'errors': ['接口适配未通过检查：' + str(exc)[:1000]]}
         if not draft.code_candidate:
+            if draft.workflow and not draft.questions:
+                try:
+                    validate_compiled(self.hub, draft.workflow, {**build, 'tools': [*build['tools'], *created]})
+                except (ValueError, KeyError, PermissionError, ValidationError, SchemaError) as exc:
+                    return {'draft': draft.model_dump(), 'errors': ['流程验证失败：' + str(exc)[:1000]]}
             return {'draft': draft.model_dump(), 'tools': created,
                     'development': state['development'], 'research': state.get('evidence', [])}
         while True:

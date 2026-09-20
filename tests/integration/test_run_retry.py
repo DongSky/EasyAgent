@@ -423,3 +423,66 @@ async def test_retried_build_graph_animates_without_replacing_nodes(api, monkeyp
             allow_request.set()
             release.set()
             await browser.close()
+
+
+async def test_legacy_invalid_build_can_retry_from_chat_and_execute(api):
+    from playwright.async_api import async_playwright, expect
+    from easyagent.contracts import ModelResult
+    from easyagent.store import encode
+    from test_workspace_chat import settled
+    url, hub = api
+    release = asyncio.Event()
+    calls = []
+    draft = {'workflow': {'name': 'validated', 'steps': [
+        {'id': 'work', 'target': 'test.schema', 'input': {'value': 12}}]}, 'explanation': '保存文字输入'}
+
+    class Planner:
+        async def generate(self, request, model):
+            calls.append(request.response_schema['title'])
+            if calls[-1] == 'BuildDraft':
+                return ModelResult(data=draft)
+            assert calls[-1] == 'BuildEdits'
+            await release.wait()
+            return ModelResult(data={'edits': [{'op': 'set', 'path': ['workflow', 'steps', 0, 'input', 'value'],
+                                              'value': 'correct'}], 'done': True})
+
+    async def echo(args, ctx):
+        return args
+
+    async def old_verify(args, ctx):
+        hub.store.checkpoint(ctx.job, {'draft': args['draft'], 'attempt': 0, 'development': []})
+        return {'draft': args['draft'], 'errors': ['old validation failure']}
+
+    hub.tools.register(ToolSpec(name='test.schema', input_schema={
+        'type': 'object', 'properties': {'value': {'type': 'string'}}, 'required': ['value']}), echo)
+    spec, current_verify = hub.tools.entries['development.verify_build']
+    hub.tools.entries['development.verify_build'] = (spec, old_verify)
+    hub.models.register('planner', Planner(), 'fixture', ['decision'])
+    c = await hub.conversations.create({'workspace': True, 'model': 'planner'})
+    await hub.conversations.send(c['id'], {'text': '创建保存输入的流程', 'intent': 'create'})
+    c = await settled(hub, c['id'])
+    turn = c['turns'][-1]
+    assert turn['status'] == 'succeeded' and turn['task']['phase'] == 'clarification'
+    run_id = turn['run_id']
+    hub.tools.entries['development.verify_build'] = (spec, current_verify)
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch()
+        try:
+            page = await browser.new_page(reduced_motion='no-preference')
+            await page.add_init_script('localStorage.setItem("easyagent.workspaceConversation", '+encode(c['id'])+')')
+            await page.goto(url+'/#conversations')
+            card = page.locator('[data-turn="'+turn['id']+'"]')
+            await card.get_by_role('button', name='从失败处重试').click()
+            node = card.locator('[data-node="verify"]')
+            await expect(node).to_have_attribute('data-status', 'running')
+            await expect(node.locator('.chat-node-indicator')).to_have_css('animation-name', 'chatSpin')
+            release.set()
+            c = await settled(hub, c['id'])
+            assert c['turns'][-1]['task']['phase'] == 'completed', c['turns'][-1]
+            assert hub.store.run(run_id)['steps'][0]['attempts'] == 1
+            executed = hub.store.run(c['turns'][-1]['run_id'])
+            assert executed['steps'][0]['output'] == {'value': 'correct'}
+            assert calls == ['BuildDraft', 'BuildEdits']
+        finally:
+            release.set()
+            await browser.close()

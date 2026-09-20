@@ -24,9 +24,16 @@ def legacy_build_budget(spec):
 
 def retry_options(db, run, _nested=False):
     steps = db.execute("SELECT * FROM steps WHERE run_id=?", (run['id'],)).fetchall()
+    spec = json.loads(run['spec']) if isinstance(run['spec'], str) else run['spec']
+    invalid_verification = [s for s in steps if s['id'] == 'verify' and s['status'] == 'succeeded'
+                            and json.loads(s['spec']).get('target') == 'development.verify_build'
+                            and isinstance(output := json.loads(s['output'] or 'null'), dict) and output.get('errors')]
+    legacy_invalid = bool(spec.get('metadata', {}).get('assistant_builder') and run['status'] == 'succeeded' and invalid_verification)
     failures = [s for s in steps if s['status'] == 'failed']
+    if legacy_invalid:
+        failures = invalid_verification
     reason = ''
-    if run['status'] != 'failed' or not failures:
+    if (run['status'] != 'failed' and not legacy_invalid) or not failures:
         reason = '只有失败的任务可以从中断处重试。'
     elif db.execute("SELECT 1 FROM invocations WHERE run_id=? AND status IN ('started','uncertain','denied') LIMIT 1", (run['id'],)).fetchone():
         reason = '存在结果未核验或已拒绝的调用，请先处理原调用。'
@@ -34,7 +41,6 @@ def retry_options(db, run, _nested=False):
         reason = '请在主任务中重试，以便同步恢复失败的子流程。'
     elif any(json.loads(s['state']).get('compensation') for s in failures):
         reason = '失败步骤已进入补偿处理，请核对结果后调整流程。'
-    spec = json.loads(run['spec']) if isinstance(run['spec'], str) else run['spec']
     limits = spec.get('limits', {})
     upgrade = legacy_build_budget(spec)
     if upgrade:
@@ -62,8 +68,9 @@ def retry_options(db, run, _nested=False):
                 break
     return {'allowed': not reason, 'reason': reason, 'longer_wait': not reason and timeout,
             'build_budget_upgrade': upgrade,
+            'verification_failure': legacy_invalid,
             'failed_steps': [s['id'] for s in failures],
-            'preserved_steps': sum(s['status'] == 'succeeded' for s in steps)}
+            'preserved_steps': sum(s['status'] == 'succeeded' for s in steps) - len(invalid_verification if legacy_invalid else [])}
 
 
 async def retry_run(hub, run_id, body):
@@ -80,11 +87,19 @@ async def retry_run(hub, run_id, body):
                 raise Conflict(options['reason'])
             if body.longer_wait and not options['longer_wait']:
                 raise ValueError('当前错误不属于超时，请使用普通重试或先修改配置。')
+            if options['verification_failure']:
+                # Old verifiers returned validation errors as a successful local tool result.
+                # Recheck that internal result; never invalidate external calls or their receipts.
+                db.execute("UPDATE invocations SET status='failed',error='validation failed' "
+                           "WHERE run_id=? AND step_id='verify' AND tool='development.verify_build' AND status='succeeded'", (run_id,))
+                db.execute("UPDATE steps SET status='failed',error='流程验证未通过，继续自动修正' WHERE run_id=? AND id='verify'", (run_id,))
+                db.execute("UPDATE runs SET status='failed' WHERE id=?", (run_id,))
+                hub.store.event(db, run_id, 'build.validation_resumed', {'step': 'verify', 'draft_preserved': True})
             # One run belongs to at most one chat turn. Advance it in the same transaction.
             turns = db.execute('SELECT t.*,j.state AS chat_state FROM conversation_turns t '
                 'LEFT JOIN conversation_jobs j ON j.turn_id=t.id WHERE t.run_id=?', (run_id,)).fetchall()
             for turn in turns:
-                if turn['status'] != 'failed':
+                if turn['status'] != 'failed' and not (options['verification_failure'] and turn['status'] == 'succeeded'):
                     raise Conflict('对话状态尚未同步或已变化，请刷新后重试。')
                 if db.execute('SELECT 1 FROM conversation_turns WHERE conversation=? AND '
                     '(created>? OR (created=? AND id>?)) LIMIT 1',

@@ -289,7 +289,8 @@ async def test_connected_image_model_gets_edit_node_without_user_schema(api):
         assert 'image-fixture-key' not in json.dumps(result)
 
 
-async def test_missing_api_searches_reads_docs_and_authored_adapter_runs(api, monkeypatch):
+@pytest.mark.parametrize('invalid_headers', [False, True])
+async def test_missing_api_searches_reads_docs_and_authored_adapter_runs(api, monkeypatch, invalid_headers):
     from easyagent import capability_research
     url, hub = api
     remote = FastAPI()
@@ -313,8 +314,15 @@ async def test_missing_api_searches_reads_docs_and_authored_adapter_runs(api, mo
     monkeypatch.setattr(capability_research, 'fetch_document', document)
 
     class DiscoverBuilder:
+        repaired = False
+
         async def generate(self, request, model):
             context = json.loads(request.messages[-1]['content'])
+            if request.response_schema['title'] == 'BuildEdits':
+                assert 'generated definitions cannot supply credentials or headers' in context['feedback']
+                self.repaired = True
+                return ModelResult(data={'edits': [{'op': 'set', 'path': ['api_candidates', 0, 'definition', 'headers'],
+                                                   'value': {}}], 'done': True})
             if 'research_evidence' not in context:
                 return ModelResult(data={'workflow': None, 'questions': [], 'explanation': '查找转换接口文档。',
                     'research_queries': ['conversion API documentation']})
@@ -323,10 +331,12 @@ async def test_missing_api_searches_reads_docs_and_authored_adapter_runs(api, mo
                 {'id': 'convert', 'target': name, 'input': {'value': 21}}]}, 'explanation': '已阅读接口文档并创建适配节点。',
                 'questions': [], 'api_candidates': [{'source_url': reads[0], 'service': 'service', 'definition': {
                     'name': name, 'description': 'Double input using documented API', 'url': endpoint+'/convert',
+                    'headers': {'Accept': 'application/json'} if invalid_headers else {},
                     'input_schema': {'type': 'object', 'properties': {'value': {'type': 'integer'}}, 'required': ['value']}}}]})
 
     async with live_server(remote) as endpoint:
-        hub.models.register('planner', DiscoverBuilder(), 'fixture', ['decision'])
+        provider = DiscoverBuilder()
+        hub.models.register('planner', provider, 'fixture', ['decision'])
         hub.models.register('service', HTTPProvider(endpoint), 'fixture-service', ['chat'])
         body = assistant('调用转换服务计算 21 的两倍')
         run = await hub.wait(start_build(hub, 'discovery', body)['id'])
@@ -336,3 +346,4 @@ async def test_missing_api_searches_reads_docs_and_authored_adapter_runs(api, mo
         result = await hub.wait(hub.submit(plan['workflow']))
         assert result['steps'][0]['output'] == {'value': 42}
         assert searches and reads and calls == [21]
+        assert provider.repaired == invalid_headers

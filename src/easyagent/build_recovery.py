@@ -87,7 +87,7 @@ async def assemble(builder, ctx, model, schema, instruction, content, progress, 
                 # Keep room for provider reasoning tokens; make the edits smaller, not the reasoning allowance.
                 model=model, capability='decision', max_output_tokens=tokens, response_schema=EDIT_SCHEMA,
                 messages=[{'role': 'system', 'content': instruction + '\n'
-                    'The full response exceeded the output limit. Construct the required object incrementally. '
+                    'Construct or repair the required object incrementally using the saved draft and validation feedback. '
                     'Return only BuildEdits, with at most four small edits per turn. These edits ONLY update a '
                     'private JSON draft; they never execute tools or publish code. The draft below is authoritative. '
                     'Do not repeat accepted edits. Preserve the original task, branches, joins, inputs and receipts. '
