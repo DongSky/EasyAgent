@@ -17,8 +17,8 @@ async def test_runtime_does_not_claim_another_projects_namespace(first, tmp_path
     # This name is deliberately owned by an unrelated fixture, never an alias.
     independent = tmp_path / "easyagenthub"
     independent.mkdir()
-    (independent / "__init__.py").write_text('OWNER = "independent-project"\n')
-    (independent / "contracts.py").write_text('class Workflow: pass\n')
+    (independent / "__init__.py").write_text('OWNER = "independent-project"\n', encoding='utf-8')
+    (independent / "contracts.py").write_text('class Workflow: pass\n', encoding='utf-8')
     script = textwrap.dedent('''
         import asyncio
         import importlib
@@ -71,7 +71,7 @@ async def test_runtime_does_not_claim_another_projects_namespace(first, tmp_path
 async def test_canonical_commands_run_workflows_and_keep_http_contracts(api):
     url, hub = api
     root = Path(__file__).resolve().parents[2]
-    flow = json.loads((root / "examples/first-workflow.json").read_text())
+    flow = json.loads((root / "examples/first-workflow.json").read_text(encoding='utf-8'))
     async with httpx.AsyncClient(base_url=url) as client:
         assert (await client.get("/openapi.json")).json()["info"]["title"] == "EasyAgent"
         assert "EasyAgent · 工作室" in (await client.get("/")).text

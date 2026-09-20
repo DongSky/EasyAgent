@@ -25,14 +25,14 @@ async def test_actual_process_kill_restart_recovers_same_invocation(tmp_path):
                 await asyncio.sleep(0.02)
         first.kill()
         await first.wait()
-        recorded = json.loads(receipt.read_text())
+        recorded = json.loads(receipt.read_text(encoding='utf-8'))
         second = await asyncio.create_subprocess_exec(sys.executable, str(script), str(database), str(receipt),
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
         result = await hub.wait(run_id, timeout=10)
         assert result["status"] == "succeeded"
         assert result["steps"][0]["output"] == recorded
         assert result["steps"][0]["attempts"] == 2
-        assert json.loads(receipt.read_text())["writes"] == 1
+        assert json.loads(receipt.read_text(encoding='utf-8'))["writes"] == 1
     finally:
         for process in (first, second):
             if process and process.returncode is None:

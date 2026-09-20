@@ -58,7 +58,7 @@ async def test_tinyfish_all_three_modes_and_restart_config(api, tmp_path, monkey
         assert calls[0] == {k: str(v) for k, v in query.items()}
         # Exported config uses an environment reference; works with a fresh registry/process lifecycle.
         path = tmp_path / "connections.json"
-        path.write_text(json.dumps(response.json()["config"]))
+        path.write_text(json.dumps(response.json()["config"]), encoding='utf-8')
         monkeypatch.setenv("TINYFISH_API_KEY", "synthetic-key")
         restarted = Hub(tmp_path / "restart.db", poll_seconds=0.01)
         await configure(restarted, path)

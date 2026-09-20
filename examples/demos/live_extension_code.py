@@ -55,7 +55,7 @@ Actually call all three tools; your final answer must contain the installed tool
             return response.json()
 
         identifier = (await request("/v1/runs", workflow))["id"]
-        (root / "development-run-id.txt").write_text(identifier)
+        (root / "development-run-id.txt").write_text(identifier, encoding='utf-8')
 
         async def wait(run_id, allow_publish=False):
             async with asyncio.timeout(300):
@@ -75,7 +75,7 @@ Actually call all three tools; your final answer must contain the installed tool
                             )
                             assert row["status"] == "tested" and all(r["passed"] for r in row["report"])
                             (root / "generated-package.json").write_text(
-                                json.dumps(row, ensure_ascii=False, indent=2)
+                                json.dumps(row, ensure_ascii=False, indent=2), encoding='utf-8'
                             )
                             await request("/v1/approvals/" + approval["id"], {"approved": True})
                     if run["status"] in ("succeeded", "failed", "cancelled", "needs_attention"):
@@ -83,7 +83,7 @@ Actually call all three tools; your final answer must contain the installed tool
                     await asyncio.sleep(0.5)
 
         run = await wait(identifier, True)
-        (root / "development-run.json").write_text(json.dumps(run, ensure_ascii=False, indent=2))
+        (root / "development-run.json").write_text(json.dumps(run, ensure_ascii=False, indent=2), encoding='utf-8')
         assert run["status"] == "succeeded", run
         proofs = []
         for title, items, expected in [("搬家预算", [12.5, 12.5, 5], 30), ("旅行预算", [0.1, 0.2], 0.3)]:
@@ -96,7 +96,7 @@ Actually call all three tools; your final answer must contain the installed tool
                 "total": expected
             }, completed
             proofs.append(completed)
-        (root / "reuse-runs.json").write_text(json.dumps(proofs, ensure_ascii=False, indent=2))
+        (root / "reuse-runs.json").write_text(json.dumps(proofs, ensure_ascii=False, indent=2), encoding='utf-8')
         print(
             json.dumps(
                 {

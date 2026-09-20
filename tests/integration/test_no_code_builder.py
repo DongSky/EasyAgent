@@ -79,7 +79,7 @@ async def test_no_code_build_preview_export_three_clients_and_stale_guard(api, t
             assert set(archive.namelist()) >= {"input.json", "dependencies.json", "WORKFLOW.md", "run.py", "run.mjs", "src/main.rs"}
             assert "搜索资料" in archive.read("WORKFLOW.md").decode()
             archive.extractall(tmp_path)
-        (tmp_path/"input.json").write_text(json.dumps({"message": "synthetic-client-input"}))
+        (tmp_path/"input.json").write_text(json.dumps({"message": "synthetic-client-input"}), encoding='utf-8')
         env = {**os.environ, "EAH_URL": url, "CARGO_TARGET_DIR": str(ROOT/"sdk/rust/target")}
         for command in [[sys.executable, "run.py"], ["node", "run.mjs"], ["cargo", "run", "--quiet"]]:
             process = await asyncio.create_subprocess_exec(*command, cwd=tmp_path, env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)

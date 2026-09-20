@@ -93,7 +93,7 @@ async def test_share_complete_agent_workflow_js_import_clean_hub_and_restart(api
         )
         root = tmp_path / "skills" / "test-skill"
         root.mkdir(parents=True)
-        (root / "SKILL.md").write_text("---\nname: test-skill\ndescription: test\n---\nFROZEN_SKILL")
+        (root / "SKILL.md").write_text("---\nname: test-skill\ndescription: test\n---\nFROZEN_SKILL", encoding='utf-8')
         source.skills.discover(root.parent)
         policy = source.evolution.propose(
             Policy(
@@ -186,7 +186,7 @@ async def test_share_complete_agent_workflow_js_import_clean_hub_and_restart(api
         app = create_app(target)
         install_studio(app, target)
         package_file = tmp_path / "workflow.json"
-        package_file.write_text(json.dumps(package))
+        package_file.write_text(json.dumps(package), encoding='utf-8')
         async with live_server(app) as target_url, httpx.AsyncClient(base_url=target_url) as dest:
             initial = await dest.post("/v1/workflow-packages/preview", json={"package": package})
             assert initial.status_code == 200 and not initial.json()["ready"]

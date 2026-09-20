@@ -28,7 +28,7 @@ class Acceptance:
         output.mkdir(parents=True, exist_ok=True)
 
     def save(self, name, value):
-        (self.output / name).write_text(json.dumps(value, ensure_ascii=False, indent=2))
+        (self.output / name).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
 
     async def post(self, path, body):
         response = await self.client.post(path, json=body)
@@ -38,7 +38,7 @@ class Acceptance:
     async def run(self, name, workflow):
         path = self.output / (name + "-id.json")
         if path.exists():
-            identifier = json.loads(path.read_text())["id"]
+            identifier = json.loads(path.read_text(encoding='utf-8'))["id"]
         else:
             self.save(name + "-workflow.json", workflow)
             await self.post("/v1/studio/workflows", workflow)
@@ -87,7 +87,7 @@ async def main(args):
         image = await demo.node("v1.post.v1_images_edits", IMAGE_MODEL,
                                 {"body": {"model": IMAGE_MODEL, "n": 1, "size": "1024x1024", "quality": "medium"}})
         draw = image["step"] | {"id": "draw", "max_attempts": 1}
-        draw["input"]["body"].update(image=response.json()["id"], prompt=Path(args.image_prompt).read_text())
+        draw["input"]["body"].update(image=response.json()["id"], prompt=Path(args.image_prompt).read_text(encoding='utf-8'))
         image_flow = {"name": "参考图生成 Q 版表情", "steps": [draw]}
         result = await demo.run("image", image_flow)
         artifact = result["steps"][0]["output"]["artifacts"][0]
@@ -108,7 +108,7 @@ async def main(args):
         video = await demo.node("seedance.post.api_v3_contents_generations_tasks", VIDEO_MODEL)
         animate = video["step"] | {"id": "animate", "max_attempts": 1}
         animate["input"] = {"body": {"model": VIDEO_MODEL, "content": [
-            {"type": "text", "text": Path(args.video_prompt).read_text()},
+            {"type": "text", "text": Path(args.video_prompt).read_text(encoding='utf-8')},
             {"type": "image_url", "image_url": {"url": {"$ref": "$input.image"}}, "role": "first_frame"}],
             # Seedance 2.5 first-frame generation requires adaptive; it follows the input image ratio.
             "duration": 4, "ratio": "adaptive", "generate_audio": False}}

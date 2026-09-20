@@ -99,7 +99,7 @@ async def test_async_sdk_tool_agent_extension_points_and_export(hub, tmp_path):
         assert runtime.hub.artifacts.get(uploaded["id"])[1]
     async with Runtime(tmp_path / "fresh.db") as runtime:
         with pytest.raises(ValueError, match="original @tool"):
-            await runtime.arun(json.loads((tmp_path / "flow.json").read_text()), prompt="hi")
+            await runtime.arun(json.loads((tmp_path / "flow.json").read_text(encoding='utf-8')), prompt="hi")
 
 
 async def test_cli_stdin_export_approval_restart_and_changed_code_rejection(tmp_path):
@@ -112,7 +112,7 @@ async def test_cli_stdin_export_approval_restart_and_changed_code_rejection(tmp_
             print('diagnostic from tool')
             Path('receipt.txt').write_text(text)
             return {'written': text}
-    '''))
+    '''), encoding='utf-8')
     base = ["-m", "easyagent.cli"]
     database = tmp_path / "state.db"
     code, out, err = await process(*base, "export", f"{source}:flow", cwd=tmp_path)
@@ -127,17 +127,17 @@ async def test_cli_stdin_export_approval_restart_and_changed_code_rejection(tmp_
     invocation = paused["approvals"][0]["id"]
     code, out, err = await process(*base, "approve", invocation, "--database", database, "--yes", cwd=tmp_path)
     assert code == 0, err
-    original = source.read_text()
-    source.write_text(original.replace("return {'written': text}", "return {'different': text}"))
+    original = source.read_text(encoding='utf-8')
+    source.write_text(original.replace("return {'written': text}", "return {'different': text}"), encoding='utf-8')
     code, out, err = await process(*base, "resume", paused["id"], "--source", f"{source}:flow", "--database", database, cwd=tmp_path)
     assert code == 2 and "original @tool" in err
     assert not (tmp_path / "receipt.txt").exists()
-    source.write_text(original)
+    source.write_text(original, encoding='utf-8')
     code, out, err = await process(*base, "resume", paused["id"], "--source", f"{source}:flow", "--database", database, cwd=tmp_path)
     assert code == 0, err
     assert json.loads(out)["outputs"]["result"] == {"written": "saved"}
     assert "diagnostic from tool" in err
-    assert (tmp_path / "receipt.txt").read_text() == "saved"
+    assert (tmp_path / "receipt.txt").read_text(encoding='utf-8') == "saved"
     code, out, err = await process(*base, "run", f"{source}:flow", "--database", database,
                                  "--input", '{"text":"saved"}', "--key", "receipt", cwd=tmp_path)
     assert code == 0 and json.loads(out)["id"] == paused["id"], err
@@ -146,10 +146,10 @@ async def test_cli_stdin_export_approval_restart_and_changed_code_rejection(tmp_
 
 async def test_cli_failed_and_timeout_exit_codes(tmp_path):
     source = tmp_path / "flow.json"
-    source.write_text(json.dumps({"name": "waiting", "steps": [{"id": "a", "target": "core.echo", "not_before": 9999999999}]}))
+    source.write_text(json.dumps({"name": "waiting", "steps": [{"id": "a", "target": "core.echo", "not_before": 9999999999}]}), encoding='utf-8')
     code, out, err = await process("-m", "easyagent.cli", "run", source, "--database", tmp_path / "state.db", "--timeout", ".05", cwd=tmp_path)
     assert code == 4 and json.loads(out)["id"], err
-    source.write_text(json.dumps({"name": "failure", "steps": [{"id": "a", "target": "core.fail", "max_attempts": 1}]}))
+    source.write_text(json.dumps({"name": "failure", "steps": [{"id": "a", "target": "core.fail", "max_attempts": 1}]}), encoding='utf-8')
     # Invalid tool binding is a configuration failure, not a silently successful command.
     code, out, err = await process("-m", "easyagent.cli", "run", source, "--database", tmp_path / "other.db", cwd=tmp_path)
     assert code == 2 and err

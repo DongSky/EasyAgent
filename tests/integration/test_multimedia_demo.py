@@ -73,7 +73,7 @@ async def test_multimedia_demo_artifact_to_video_export_and_resume(api, monkeypa
     reference = tmp_path / 'reference.png'
     reference.write_bytes(png)
     prompt = tmp_path / 'prompt.txt'
-    prompt.write_text('fixture prompt')
+    prompt.write_text('fixture prompt', encoding='utf-8')
     async with live_server(remote) as endpoint:
         args = Namespace(hub=url, hub_token='', base_url=endpoint+'/v1', reference=str(reference),
                          image_prompt=str(prompt), video_prompt=str(prompt), output=str(tmp_path/'output'),
@@ -86,7 +86,7 @@ async def test_multimedia_demo_artifact_to_video_export_and_resume(api, monkeypa
                       'uploads': int(reference_mode == 'url-upload'), 'polls': 2}
     assert (tmp_path/'output/expression.png').read_bytes() == png
     assert (tmp_path/'output/animation.mp4').read_bytes() == b'video-protocol-fixture'
-    export = (tmp_path/'output/complete-workflow.json').read_text()
+    export = (tmp_path/'output/complete-workflow.json').read_text(encoding='utf-8')
     assert 'draw.artifacts.0.id' in export
     assert ('animate.result.data.task_id' if reference_mode == 'inline' else 'animate.result.id') in export
     if reference_mode == 'url-upload':

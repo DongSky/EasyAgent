@@ -29,7 +29,7 @@ async def test_named_call_validation_idempotency_version_update_and_restart(api,
         output = await jobs[0].result(poll_interval=.02)
         assert output.outputs['answer'] == 'Alice'
         await output.download('file', tmp_path/'answer.txt')
-        assert (tmp_path/'answer.txt').read_text() == 'Alice'
+        assert (tmp_path/'answer.txt').read_text(encoding='utf-8') == 'Alice'
         changed = flow()
         changed['steps'][0]['input'] = {'name': 'new version'}
         await client.request('PUT', '/v1/workflows/demo.named?expected_revision=1', changed)

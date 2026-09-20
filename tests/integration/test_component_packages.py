@@ -53,7 +53,7 @@ async def test_export_import_dependency_bundle_across_clean_hubs(api, tmp_path, 
             assert preview.json()['execution_started'] is False and not requests
             # Use a real JS client: JSON.parse/stringify changes integral floats to integers.
             package_path = tmp_path/'component.json'
-            package_path.write_text(json.dumps(package))
+            package_path.write_text(json.dumps(package), encoding='utf-8')
             code = '''import {readFile} from 'node:fs/promises';
 import {HubClient} from './sdk/javascript/index.js';
 const client=new HubClient(process.env.EAH_URL);

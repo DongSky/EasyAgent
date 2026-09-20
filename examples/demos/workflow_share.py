@@ -71,7 +71,7 @@ async def main(args):
         }
         saved = await client.request("POST", "/v1/studio/workflows", workflow)
         package = await client.request("GET", f"/v1/studio/workflows/{saved['id']}/package")
-        (out / "workflow.eah-workflow.json").write_text(json.dumps(package, ensure_ascii=False, indent=2))
+        (out / "workflow.eah-workflow.json").write_text(json.dumps(package, ensure_ascii=False, indent=2), encoding='utf-8')
     os.environ["EAH_SHARED_DECISION_KEY"] = os.environ["TYPESAFE_API_KEY"]
     target = Hub(out / "receiving.db", poll_seconds=0.03)
     target.models.register(
@@ -93,7 +93,7 @@ async def main(args):
     await target.start()
     try:
         run = await target.wait(target.submit(imported["workflow"]), timeout=240)
-        (out / "run.json").write_text(json.dumps(run, ensure_ascii=False, indent=2))
+        (out / "run.json").write_text(json.dumps(run, ensure_ascii=False, indent=2), encoding='utf-8')
         assert run["status"] == "succeeded", run["status"]
         assert run["steps"][0]["output"]["results"][0]["decision"]["choice"] == "support"
         meta, content = target.artifacts.get(run["steps"][-1]["output"]["id"])
@@ -117,7 +117,7 @@ async def main(args):
             "receiving_model": "local-gpt",
             "execution_started_on_import": imported["execution_started"],
         }
-        (out / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2))
+        (out / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
         print(json.dumps({"evidence": str(out.resolve()), **report}, ensure_ascii=False, indent=2))
     finally:
         await target.stop()

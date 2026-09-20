@@ -20,7 +20,7 @@ async def main():
                 r.raise_for_status()
                 result=r.json()
                 if result['run']['status'] in ('succeeded','failed','waiting_input','needs_attention','cancelled'):
-                    Path('.eah/build/live-goal-repair.json').write_text(json.dumps(result,ensure_ascii=False,indent=2))
+                    Path('.eah/build/live-goal-repair.json').write_text(json.dumps(result,ensure_ascii=False,indent=2), encoding='utf-8')
                     print('status',result['run']['status'],'revision',result['state'].get('revision'),'usage',result['run']['usage'])
                     assert result['run']['status']=='succeeded',result['run']['steps'][0].get('error') or result['state'].get('question')
                     break

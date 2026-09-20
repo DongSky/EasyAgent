@@ -13,11 +13,11 @@ from easyagent.store import Conflict
 
 def guide(revision=1):
     root = Path("examples/extensions/guide")
-    manifest = json.loads((root / "manifest.json").read_text())
+    manifest = json.loads((root / "manifest.json").read_text(encoding='utf-8'))
     manifest["revision"] = revision
     source = (
         (root / "extension.js")
-        .read_text()
+        .read_text(encoding='utf-8')
         .replace("args.price * args.count", f"args.price * args.count * {revision}")
     )
     return build_package(manifest, {"extension.js": source})

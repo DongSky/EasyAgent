@@ -30,7 +30,7 @@ CASES = [
 
 
 def write(path, value):
-    path.write_text(json.dumps(value, ensure_ascii=False, indent=2))
+    path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
 
 
 def verify(run, expected):

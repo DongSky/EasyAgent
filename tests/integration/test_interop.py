@@ -39,7 +39,7 @@ async def test_three_language_plugins_and_sdks(api, tmp_path):
             "name": language + ".add", "input_schema": {"type": "object", "required": ["a", "b"], "properties": {
                 "a": {"type": "number"}, "b": {"type": "number"}}}}]}
         path = tmp_path / (language + ".json")
-        path.write_text(json.dumps(manifest))
+        path.write_text(json.dumps(manifest), encoding='utf-8')
         load_plugin(hub.tools, path)
         steps.append({"id": language, "target": language + ".add", "input": {"a": 2, "b": 3}})
     run = await hub.wait(hub.submit({"name": "three languages", "steps": steps}))
@@ -92,10 +92,10 @@ async def test_mcp_stdio_http_and_hub_server(api):
 
 async def test_bad_plugin_and_output_limit_fail_safely(hub, tmp_path):
     script = tmp_path / "bad.py"
-    script.write_text('import sys\nsys.stdin.readline()\nprint("x" * 5000)\n')
+    script.write_text('import sys\nsys.stdin.readline()\nprint("x" * 5000)\n', encoding='utf-8')
     manifest = tmp_path / "bad.json"
     manifest.write_text(json.dumps({"name": "bad", "command": [sys.executable, str(script)], "max_output_bytes": 1024,
-                                    "tools": [{"name": "bad.output"}]}))
+                                    "tools": [{"name": "bad.output"}]}), encoding='utf-8')
     load_plugin(hub.tools, manifest)
     run = await hub.wait(hub.submit({"name": "bad plugin", "steps": [{"id": "a", "target": "bad.output"}]}))
     assert run["status"] == "failed"

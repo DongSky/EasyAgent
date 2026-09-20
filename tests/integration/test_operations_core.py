@@ -105,11 +105,11 @@ async def test_shared_rust_core_host_approval_checkpoint_recovery(tmp_path):
             }
         )
         file = tmp_path / "checkpoint.json"
-        file.write_text(json.dumps(value["state"]))
+        file.write_text(json.dumps(value["state"]), encoding='utf-8')
         value = await send(
             {
                 "op": "apply",
-                "state": json.loads(file.read_text()),
+                "state": json.loads(file.read_text(encoding='utf-8')),
                 "event": {"type": "recover", "step_id": "send", "invocation_id": action["invocation_id"]},
             }
         )

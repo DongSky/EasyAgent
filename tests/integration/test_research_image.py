@@ -62,13 +62,13 @@ def provider_fixture(*, writer_started=None, release_writer=None, empty=False):
 
 
 def config_file(tmp_path, endpoint):
-    config = json.loads((EXAMPLE.parent/'research_image.config.example.json').read_text())
+    config = json.loads((EXAMPLE.parent/'research_image.config.example.json').read_text(encoding='utf-8'))
     config['search'][0]['endpoint'] = endpoint + '/search'
     config['models'][0]['base_url'] = endpoint + '/v1'
     config['models'][0]['model'] = 'fixture-text'
     config['http_tools'][0]['url'] = endpoint + '/v1/images/edits'
     path = tmp_path/'config.json'
-    path.write_text(json.dumps(config))
+    path.write_text(json.dumps(config), encoding='utf-8')
     return path
 
 
@@ -121,7 +121,7 @@ async def test_research_image_multiple_inputs_concurrent_fork_join_approval_rest
             assert result.value['image']['media_type'] == 'image/png'
             files = save_result(restored, result, tmp_path/'output')
             assert Path(files['image']).read_bytes() == PNG
-            assert 'https://example.test/character' in Path(files['sources']).read_text()
+            assert 'https://example.test/character' in Path(files['sources']).read_text(encoding='utf-8')
             assert not restored.hub.store.run(result.id)['children']
             assert len(calls['search']) == len(calls['writer']) == len(calls['image']) == 1
 
@@ -133,7 +133,7 @@ async def test_research_image_cli_export_and_run_resume(tmp_path):
     export = tmp_path/'graph.json'
     code, out, err = await process_output(sys.executable, EXAMPLE, '--export', export, env=env)
     assert code == 0, err.decode()
-    assert len(json.loads(export.read_text())['steps']) == 8 and not calls['search']
+    assert len(json.loads(export.read_text(encoding='utf-8'))['steps']) == 8 and not calls['search']
     reference = tmp_path/'reference.png'
     reference.write_bytes(PNG)
     database = tmp_path/'cli.db'

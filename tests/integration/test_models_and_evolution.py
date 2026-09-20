@@ -76,14 +76,14 @@ async def test_skills_loaded_and_pinned_with_real_agent(hub, tmp_path):
     skill = root / "planner"
     skill.mkdir(parents=True)
     path = skill / "SKILL.md"
-    path.write_text('---\nname: planner\ndescription: Organize daily tasks\n---\nKeep sources.')
-    (skill / "reference.md").write_text("Evidence matters")
+    path.write_text('---\nname: planner\ndescription: Organize daily tasks\n---\nKeep sources.', encoding='utf-8')
+    (skill / "reference.md").write_text("Evidence matters", encoding='utf-8')
     hub.skills.discover(root)
     assert hub.skills.resource("planner", "reference.md") == "Evidence matters"
     with pytest.raises(ValueError):
         hub.skills.resource("planner", "../../outside")
     run = hub.submit({"name": "skill", "steps": [{"id": "a", "kind": "agent", "target": "mock", "input": {
         "prompt": "hello", "skills": ["planner"]}}]})
-    path.write_text("changed after submission")
+    path.write_text("changed after submission", encoding='utf-8')
     assert "Keep sources." in hub.store.run(run)["spec"]["steps"][0]["input"]["instructions"]
     assert (await hub.wait(run))["status"] == "succeeded"

@@ -15,9 +15,9 @@ async def main():
 
     async def durable_effect(args, context):
         if receipt.exists():
-            return json.loads(receipt.read_text())
+            return json.loads(receipt.read_text(encoding='utf-8'))
         value = {"invocation_id": context.invocation_id, "writes": 1}
-        receipt.write_text(json.dumps(value))
+        receipt.write_text(json.dumps(value), encoding='utf-8')
         await asyncio.sleep(30)
         return value
 

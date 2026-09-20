@@ -48,7 +48,7 @@ async def main():
         }
         for language, invocation in commands.items():
             path = Path(directory) / (language + ".json")
-            path.write_text(json.dumps({"name": language, "command": invocation, "tools": [{"name": language + ".add"}]}))
+            path.write_text(json.dumps({"name": language, "command": invocation, "tools": [{"name": language + ".add"}]}), encoding='utf-8')
             load_plugin(hub.tools, path)
         mcp = MCPConnection(command=sys.executable, args=[str(ROOT / "examples/demos/mcp_server.py")])
         await mcp.import_tools(hub.tools, "mcp", {"add": {"effect": "read", "idempotent": True}})
