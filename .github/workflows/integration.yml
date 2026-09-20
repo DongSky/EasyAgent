@@ -19,6 +19,8 @@ jobs:
         with:
           node-version: '22'
       - uses: dtolnay/rust-toolchain@stable
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
       - run: uv sync --extra app --extra dev --python ${{ matrix.python }} --locked
       - name: Install Chromium for browser integration tests
         run: uv run --extra app --extra dev playwright install --with-deps chromium

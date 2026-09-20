@@ -42,8 +42,9 @@ def project_files(hub, assistant, workflow):
             "客户端等待结果，遇到补充信息或审批会输出暂停状态，请在 Studio 运行记录中处理。\n\n"
             "dependencies.json 列出需要接入的模型和工具。密钥、连接地址及凭证不包含在导出包内；这不是脱离 Hub 的独立部署镜像。\n",
         "requirements.txt": "httpx>=0.28,<1\n",
-        "run.py": '''import asyncio, json, os, httpx
+        "run.py": '''import asyncio, json, os, sys, httpx
 from pathlib import Path
+sys.stdout.reconfigure(encoding='utf-8')
 ROOT = Path(__file__).resolve().parent
 async def main():
     workflow = json.loads((ROOT / 'workflow.json').read_text(encoding='utf-8'))

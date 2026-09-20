@@ -287,7 +287,8 @@ class Store:
             candidates = db.execute("""SELECT s.* FROM steps s JOIN runs r ON r.id=s.run_id
                 WHERE r.status NOT IN ('cancelled','succeeded','failed') AND
                 ((s.status IN ('queued','retrying','waiting_children','waiting_remote') AND s.ready_at<=?) OR
-                 (s.status='running' AND s.lease_until<?)) ORDER BY r.created,s.rowid""", (now, now)).fetchall()
+                 (s.status='running' AND s.lease_until<?))
+                ORDER BY CASE WHEN s.status='waiting_children' THEN 1 ELSE 0 END,s.ready_at,r.created,s.rowid""", (now, now)).fetchall()
             for row in candidates:
                 if allowed is not None and row["run_id"] not in allowed:
                     continue

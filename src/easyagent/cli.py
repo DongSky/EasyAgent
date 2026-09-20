@@ -12,6 +12,9 @@ from .client import HubClient
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8')
     parser = argparse.ArgumentParser(
         prog="easyagent", description="EasyAgent — create, run and inspect durable assistants"
     )

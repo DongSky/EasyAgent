@@ -11,6 +11,7 @@ import tempfile
 import time
 import zipfile
 from pathlib import Path
+from contextlib import closing
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -39,7 +40,7 @@ def backup(database, destination, password):
         raise FileNotFoundError(database)
     with tempfile.TemporaryDirectory() as tmp:
         snap = Path(tmp) / "hub.db"
-        with sqlite3.connect(database) as source, sqlite3.connect(snap) as target:
+        with closing(sqlite3.connect(database)) as source, closing(sqlite3.connect(snap)) as target:
             source.backup(target)
             if target.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                 raise ValueError("database integrity check failed")
@@ -78,7 +79,7 @@ def restore(source, database, password):
         with tempfile.TemporaryDirectory(dir=database.parent) as tmp:
             path = Path(tmp) / "check.db"
             path.write_bytes(archive.read("hub.db"))
-            with sqlite3.connect(path) as db:
+            with closing(sqlite3.connect(path)) as db:
                 if db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                     raise ValueError("backup database corrupt")
             if "vault.key" in archive.namelist():

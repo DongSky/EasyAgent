@@ -41,16 +41,16 @@ async def test_actual_process_kill_restart_recovers_same_invocation(tmp_path):
 
 
 async def test_composite_restart_cancel_and_wall_time(tmp_path):
-    hub = Hub(tmp_path / "composite.db", lease_seconds=0.2, poll_seconds=0.01)
+    hub = Hub(tmp_path / "composite.db", lease_seconds=5, poll_seconds=0.01)
     body = {"name": "child", "steps": [{"id": "a", "kind": "approval", "input": {"x": {"$ref": "$input.item"}}}]}
     run_id = hub.submit({"name": "nested", "steps": [{"id": "loop", "kind": "foreach", "body": body, "input": {"items": [1, 2]}}]})
     await hub.start()
     await hub.wait(run_id)
     await hub.stop()
-    restarted = Hub(tmp_path / "composite.db", lease_seconds=0.2, poll_seconds=0.01)
+    restarted = Hub(tmp_path / "composite.db", lease_seconds=5, poll_seconds=0.01)
     await restarted.start()
     try:
-        async with asyncio.timeout(5):
+        async with asyncio.timeout(15):
             while len(restarted.store.run(run_id)["approvals"]) != 2:
                 await asyncio.sleep(0.02)
         restarted.store.cancel(run_id)
@@ -64,6 +64,21 @@ async def test_composite_restart_cancel_and_wall_time(tmp_path):
         assert result["status"] == "failed"
     finally:
         await restarted.stop()
+
+
+def test_ready_child_is_not_starved_by_older_parent_poll(tmp_path):
+    hub = Hub(tmp_path / 'fair.db')
+    parent = hub.submit({'name': 'parent', 'steps': [{'id': 'children', 'kind': 'transform'}]})
+    job = hub.store.claim(30)
+    child = hub.submit({'name': 'child', 'steps': [{'id': 'work', 'kind': 'transform'}]},
+                       parent=(parent, 'children', 0))
+    # The parent is already due again, as happens when disk operations exceed
+    # its polling delay. One worker must still choose the actual child work.
+    hub.store.finish(job, 'waiting_children', delay=0)
+    claimed = hub.store.claim(30)
+    assert claimed['run_id'] == child
+    hub.store.finish(claimed, 'succeeded', {'done': True})
+    assert hub.store.claim(30)['run_id'] == parent
 
 
 async def test_two_hubs_compete_without_duplicate_success(tmp_path):

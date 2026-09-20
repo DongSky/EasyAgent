@@ -124,7 +124,11 @@ async def test_three_language_media_demos_share_runs_and_download_without_token_
         reference.write_bytes(png)
         # SDK subprocesses receive only toolchain settings and this fixture's
         # Hub credential. Never copy unrelated personal model credentials.
-        env = {k: v for k, v in os.environ.items() if k in ('PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP', 'SYSTEMROOT', 'WINDIR', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'CARGO_HOME', 'RUSTUP_HOME', 'SSL_CERT_FILE', 'SSL_CERT_DIR')}
+        env = {k: v for k, v in os.environ.items() if k.upper() in (
+            'PATH', 'HOME', 'TMPDIR', 'TMP', 'TEMP', 'SYSTEMROOT', 'WINDIR', 'USERPROFILE', 'LOCALAPPDATA',
+            'APPDATA', 'CARGO_HOME', 'RUSTUP_HOME', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'LIB', 'LIBPATH', 'INCLUDE',
+            'VSCMD_ARG_TGT_ARCH', 'VCTOOLSINSTALLDIR', 'VSINSTALLDIR', 'VCINSTALLDIR', 'WINDOWSSDKDIR',
+            'WINDOWSSDKVERSION', 'UNIVERSALCRTSDKDIR', 'UCRTVERSION')}
         env.update(EAH_URL=url, EAH_TOKEN='private-hub-token', EAH_DEMO_KEY='three-languages-one-operation')
         try:
             results = await asyncio.gather(
