@@ -172,7 +172,10 @@ class WorkspaceChat:
 
     def resume_start(self, turn, state):
         phase = state['phase'].removesuffix('_starting')
-        run_id = self.hub.submit(state['workflow'], 'workspace-chat:' + turn['id'] + ':' + phase)
+        key = 'workspace-chat:' + turn['id'] + ':' + phase
+        if state.get('repair_attempt'):
+            key += ':repair-' + str(state['repair_attempt'])
+        run_id = self.hub.submit(state['workflow'], key)
         state['phase'] = phase
         if run_id not in state['runs']:
             state['runs'].append(run_id)
@@ -251,6 +254,9 @@ Respond in the user's language. title is only used if creating a new workflow. F
         if errors:
             raise ValueError('请补充流程需要的信息：' + '; '.join(e.message for e in errors)[:700])
         flow['inputs'] = values
+        if previous := state.get('repair_from'):
+            from .contracts import Workflow
+            flow = self.hub.goals.reuse_writes(Workflow.model_validate(flow), self.store.run(previous)).model_dump()
         flow.setdefault('metadata', {}).update(workspace_conversation=turn['conversation'], workspace_turn=turn['id'])
         checked = self.hub.prepare(flow).model_dump()
         state['selected'] = {k: candidate[k] for k in ('key', 'id', 'revision', 'title')}
@@ -305,6 +311,21 @@ Respond in the user's language. title is only used if creating a new workflow. F
                 if db.execute('SELECT status FROM conversation_turns WHERE id=?', (turn['id'],)).fetchone()[0] == 'cancelled':
                     self.store.cancel(build['id'])
 
+    def repair(self, turn, state, run):
+        """Continue a failed newly built task with receipts, never blindly replay completed effects."""
+        attempt = state.get('repair_attempt', 0) + 1
+        identifier = 'chat-' + turn['id'] + '-repair-' + str(attempt)
+        assistant = state['assistant']
+        feedback = {'workflow': run['spec'], 'steps': [
+            {k: step.get(k) for k in ('id', 'status', 'error', 'output')} for step in run['steps']],
+            'attempt': attempt}
+        self.store.memory_put('studio-build-feedback', identifier, feedback, 'observed-run')
+        self.store.memory_put('studio-assistants', identifier, assistant, 'conversation')
+        state.update(phase='building_starting', assistant_id=identifier, repair_attempt=attempt,
+                     repair_from=run['id'], message='发现步骤失败，正在根据实际结果修正并验证…')
+        if self.save(turn, state, 'starting'):
+            self.resume_build(turn, state)
+
     async def tick(self, conversation):
         with self.store.connect() as db:
             row = db.execute("SELECT t.*,j.state FROM conversation_turns t JOIN conversation_jobs j ON j.turn_id=t.id WHERE t.conversation=? AND t.status NOT IN ('succeeded','failed','cancelled') ORDER BY t.created,t.id LIMIT 1", (conversation['id'],)).fetchone()
@@ -326,6 +347,9 @@ Respond in the user's language. title is only used if creating a new workflow. F
             if run['status'] not in TERMINAL:
                 return
             if run['status'] != 'succeeded':
+                if (run['status'] == 'failed' and phase == 'executing' and state.get('assistant')
+                        and state.get('repair_attempt', 0) < 2):
+                    return self.repair(turn, state, run)
                 state['phase'] = run['status']
                 message = '已停止本轮。' if run['status'] == 'cancelled' else '这次处理未完成。下方保留了出错步骤和记录，可以调整需求后重试。'
                 return self.finish(turn, state, run['status'], message)

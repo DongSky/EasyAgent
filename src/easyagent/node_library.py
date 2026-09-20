@@ -114,7 +114,10 @@ class NodeLibrary:
             for step in workflow['steps']:
                 if step['kind'] == 'tool':
                     name, revision = step['target'], step.get('tool_revision')
-                    if revision:
+                    if revision and name in self.hub.extensions.owners:
+                        capabilities.add(f'tool:{name}@{revision}')
+                        effects.add(self.hub.tools.spec(name, revision).effect)
+                    elif revision:
                         visit('api', name, revision, depth + 1)
                     else:
                         # Process/MCP/custom tools need their registered host, not just HTTP support.
@@ -173,7 +176,9 @@ class NodeLibrary:
                     credential_checks.setdefault(key, []).append(bool(self.hub.development.credential(key, ref.id, ref.revision)))
         available = [ref for ref, checks in credential_checks.items() if all(checks)]
         return RuntimeProfile(id='this-hub', platform=local_platform(), location='local',
-            capabilities=['workflow.v1', 'http.v1', 'http.poll.v1', 'artifacts.v1'] + ['tool:'+n for n in self.hub.tools.entries],
+            capabilities=['workflow.v1', 'http.v1', 'http.poll.v1', 'artifacts.v1']
+                + ['tool:'+n for n in self.hub.tools.entries]
+                + [f'tool:{n}@{r}' for n, r in self.hub.tools.versions],
             # These origins were explicitly installed through operator management endpoints.
             network_origins=manifest.requirements.network_origins, credential_refs=available)
 

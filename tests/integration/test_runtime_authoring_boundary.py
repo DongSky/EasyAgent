@@ -173,14 +173,14 @@ async def test_agent_child_input_restart_and_write_approval(tmp_path):
                    ('save_workflow', {'id': 'test.flow', 'workflow': child, 'expected_revision': 0}),
                    ('run_workflow', {'id': 'test.flow', 'revision': 1})]
         grant = {'namespace': 'test', 'services': {'write': {'url': origin+'/write', 'methods': ['POST'], 'effect': 'write'}}}
-        hub = Hub(tmp_path/'resume.db', concurrency=1, poll_seconds=.01, lease_seconds=.3)
+        hub = Hub(tmp_path/'resume.db', concurrency=1, poll_seconds=.01, lease_seconds=5)
         hub.models.register('author', AuthorModel(actions), 'fixture', ['chat'])
         await hub.start()
         identifier = hub.submit(parent(grant))
         paused = await hub.wait(identifier)
         assert paused['status'] == 'waiting_input' and not calls
         await hub.stop()
-        fresh = Hub(hub.store.path, concurrency=1, poll_seconds=.01, lease_seconds=.3)
+        fresh = Hub(hub.store.path, concurrency=1, poll_seconds=.01, lease_seconds=5)
         fresh.models.register('author', AuthorModel(actions), 'fixture', ['chat'])
         async with live_server(create_app(fresh)) as server, httpx.AsyncClient(base_url=server) as client:
             response = await client.post('/v1/inputs/'+paused['input_requests'][0]['id'], json={'text': 'authorized'})

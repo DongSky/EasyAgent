@@ -549,7 +549,8 @@ class ExtensionHost:
         env = {
             k: v
             for k, v in os.environ.items()
-            if k in {"PATH", "SYSTEMROOT", "WINDIR", "LANG", "TEMP", "TMP"} | set(m.env_allow)
+            if k in {"PATH", "SYSTEMROOT", "WINDIR", "LANG", "TEMP", "TMP", "HOME", "USERPROFILE",
+                     "APPDATA", "LOCALAPPDATA", "CARGO_HOME", "RUSTUP_HOME"} | set(m.env_allow)
         }
         if m.runtime in ("javascript", "wasm"):
             command = (

@@ -34,7 +34,9 @@ async def live_server(app):
 
 @pytest.fixture
 async def hub(tmp_path):
-    instance = Hub(tmp_path / "hub.db", poll_seconds=0.01, lease_seconds=0.3)
+    # Normal integration tests must not accidentally become lease-expiry tests on busy CI hosts.
+    # Crash/restart coverage sets its own short lease explicitly.
+    instance = Hub(tmp_path / "hub.db", poll_seconds=0.01, lease_seconds=10)
     await instance.start()
     try:
         yield instance

@@ -11,13 +11,15 @@ from easyagent.runtime import Hub
 async def main():
     database, receipt_path = sys.argv[1:]
     receipt = Path(receipt_path)
-    hub = Hub(database, lease_seconds=0.3, poll_seconds=0.01)
+    hub = Hub(database, lease_seconds=1, poll_seconds=0.01)
 
     async def durable_effect(args, context):
         if receipt.exists():
             return json.loads(receipt.read_text(encoding='utf-8'))
         value = {"invocation_id": context.invocation_id, "writes": 1}
-        receipt.write_text(json.dumps(value), encoding='utf-8')
+        temporary = receipt.with_suffix('.pending')
+        temporary.write_text(json.dumps(value), encoding='utf-8')
+        temporary.replace(receipt)
         await asyncio.sleep(30)
         return value
 

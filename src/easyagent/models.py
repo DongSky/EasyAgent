@@ -92,7 +92,7 @@ class MockProvider:
 
 class HTTPProvider:
     """Provider adapters with bounded time and response bytes; keys never enter workflow state."""
-    def __init__(self, base_url, api_key="", dialect="chat", timeout=45, max_bytes=16_000_000):
+    def __init__(self, base_url, api_key="", dialect="chat", timeout=120, max_bytes=16_000_000):
         if dialect not in ("chat", "responses", "anthropic"):
             raise ValueError("dialect must be chat, responses or anthropic")
         self.base_url = base_url.rstrip("/")

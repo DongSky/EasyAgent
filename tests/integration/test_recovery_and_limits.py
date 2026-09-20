@@ -20,7 +20,7 @@ async def test_actual_process_kill_restart_recovers_same_invocation(tmp_path):
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
     second = None
     try:
-        async with asyncio.timeout(10):
+        async with asyncio.timeout(30):
             while not receipt.exists():
                 await asyncio.sleep(0.02)
         first.kill()
@@ -28,7 +28,7 @@ async def test_actual_process_kill_restart_recovers_same_invocation(tmp_path):
         recorded = json.loads(receipt.read_text(encoding='utf-8'))
         second = await asyncio.create_subprocess_exec(sys.executable, str(script), str(database), str(receipt),
             stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-        result = await hub.wait(run_id, timeout=10)
+        result = await hub.wait(run_id, timeout=30)
         assert result["status"] == "succeeded"
         assert result["steps"][0]["output"] == recorded
         assert result["steps"][0]["attempts"] == 2

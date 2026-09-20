@@ -102,7 +102,8 @@ class CodeDevelopment:
                     {"tool": scenario["tool"], "passed": output == scenario["expected"], "output": output}
                 )
             except Exception as exc:
-                results.append({"tool": scenario["tool"], "passed": False, "error": type(exc).__name__})
+                results.append({"tool": scenario["tool"], "passed": False,
+                                "error": type(exc).__name__ + ': ' + str(exc)[:1000]})
         passed = all(r["passed"] for r in results)
         with self.hub.store.connect() as db:
             db.execute(

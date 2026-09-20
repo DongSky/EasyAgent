@@ -109,7 +109,6 @@ async def test_research_image_multiple_inputs_concurrent_fork_join_approval_rest
                     await task
                 paused = stopped.value.state
                 assert paused['status'] == 'waiting_approval' and not calls['image']
-                runtime.hub.tools.approve(runtime.hub.store, paused['approvals'][0]['id'], True)
             finally:
                 release.set()
                 if not task.done():
@@ -117,6 +116,9 @@ async def test_research_image_multiple_inputs_concurrent_fork_join_approval_rest
                 await asyncio.gather(task, return_exceptions=True)
         async with Runtime(database, config=config) as restored:
             restored.bind(ResearchImage())
+            # Approve after the old runtime has stopped; otherwise it may start the
+            # non-idempotent request just before shutdown and correctly require reconciliation.
+            restored.hub.tools.approve(restored.hub.store, paused['approvals'][0]['id'], True)
             result = await restored.aresume(paused['id'])
             assert result.value['image']['media_type'] == 'image/png'
             files = save_result(restored, result, tmp_path/'output')

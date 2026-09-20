@@ -153,6 +153,8 @@ class Hub:
 
         self.attachments = Attachments(self)
         self.chat = WorkspaceChat(self)
+        from .build_capabilities import BuildCapabilities
+        self.build_capabilities = BuildCapabilities(self)
 
     @property
     def mcp(self):

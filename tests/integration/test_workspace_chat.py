@@ -38,7 +38,7 @@ def provider_app(route, compile_flow=None):
         title = body.get('response_format', {}).get('json_schema', {}).get('schema', {}).get('title')
         if title == 'DispatchDecision':
             result = await route(json.loads(body['messages'][-1]['content']))
-        elif title == 'Draft':
+        elif title in ('Draft', 'BuildDraft'):
             result = {'workflow': compile_flow, 'explanation': '读取上传材料，然后保存结果。', 'questions': []}
         else:
             return {'choices': [{'message': {'content': '附件已按原始格式交给接口。'}}]}

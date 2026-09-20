@@ -18,7 +18,7 @@ def main():
     if not isinstance(raw, str) or len(raw.encode()) > 1_000_000:
         raise ValueError("handler must return a bounded JSON value synchronously")
     json.loads(raw)
-    sys.stdout.write(raw + "\n")
+    sys.stdout.buffer.write((raw + "\n").encode('utf-8'))
 
 
 if __name__ == "__main__":
