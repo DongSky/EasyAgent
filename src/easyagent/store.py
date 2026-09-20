@@ -281,8 +281,8 @@ class Store:
             for run in db.execute("SELECT id,spec,created FROM runs WHERE status NOT IN ('succeeded','failed','cancelled')").fetchall():
                 if allowed is not None and run["id"] not in allowed:
                     continue
-                limit = json.loads(run["spec"]).get("limits", {}).get("wall_time_seconds", 604800)
-                if now - run["created"] > limit:
+                limit = json.loads(run["spec"]).get("limits", {}).get("wall_time_seconds")
+                if limit is not None and now - run["created"] > limit:
                     affected = [r[0] for r in db.execute("WITH RECURSIVE tree(id) AS (SELECT ? UNION ALL SELECT c.child_id FROM child_runs c JOIN tree ON c.parent_id=tree.id) SELECT id FROM tree", (run["id"],))]
                     for identifier in affected:
                         db.execute("UPDATE runs SET status='failed',updated=? WHERE id=? AND status NOT IN ('succeeded','failed','cancelled')", (now, identifier))
@@ -390,9 +390,9 @@ class Store:
         limits = spec.get("limits", {})
         db.execute("INSERT OR IGNORE INTO run_usage(run_id) VALUES(?)", (run_id,))
         usage = db.execute("SELECT * FROM run_usage WHERE run_id=?", (run_id,)).fetchone()
-        caps = {"model_calls": limits.get("model_calls", 64), "tool_calls": limits.get("tool_calls", 256),
-                "output_reserved": limits.get("output_tokens", 131072), "child_runs": limits.get("child_runs", 256)}
-        if kind not in caps or usage[kind] + amount > caps[kind]:
+        caps = {"model_calls": limits.get("model_calls"), "tool_calls": limits.get("tool_calls"),
+                "output_reserved": limits.get("output_tokens"), "child_runs": limits.get("child_runs", 256)}
+        if kind not in caps or caps[kind] is not None and usage[kind] + amount > caps[kind]:
             raise ValueError("run budget exceeded: " + kind)
         db.execute(f"UPDATE run_usage SET {kind}={kind}+? WHERE run_id=?", (amount, run_id))
 

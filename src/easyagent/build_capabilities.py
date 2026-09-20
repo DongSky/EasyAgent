@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import asyncio
 import json
 from urllib.parse import urlsplit
 
@@ -111,11 +112,20 @@ class BuildCapabilities:
         self.hub.store.checkpoint(ctx.job, state)
 
     async def ask(self, ctx, model, schema, instruction, content, tokens=8192, check=None,
-                  *, attempts=2, repair_state=None):
+                  *, repair_state=None):
         from .retry_policy import ModelResponseError
         root = repair_state if repair_state is not None else ctx.job['state']
-        key = hashlib.sha256(encode([model, schema, instruction, content, tokens]).encode()).hexdigest()
-        progress = root.setdefault('build_requests', {}).setdefault(key, {})
+        # Schema exports can change on upgrade. Request identity must not discard an
+        # in-progress draft just because defaults became nullable in a newer schema.
+        key = hashlib.sha256(encode([model, instruction, content, tokens]).encode()).hexdigest()
+        requests = root.setdefault('build_requests', {})
+        if key not in requests and schema.get('title') == 'BuildDraft':
+            old = [r for r in requests.values() if not r.get('request_identity')
+                   and r.get('segments', {}).get('draft') and not r['segments'].get('complete')]
+            if len(old) == 1:
+                requests[key] = old[0]
+        progress = requests.setdefault(key, {})
+        progress['request_identity'] = key
 
         def save():
             self.hub.store.checkpoint(ctx.job, root)
@@ -126,7 +136,9 @@ class BuildCapabilities:
             return await assemble(self, ctx, model, schema, instruction, content, progress, save, check, tokens)
         messages = progress.get('messages') or (repair_state or {}).get('messages') or [
             {'role': 'system', 'content': instruction}, {'role': 'user', 'content': encode(content)}]
-        for attempt in range(progress.get('attempt', (repair_state or {}).get('attempt', 0)), attempts):
+        attempt = progress.get('attempt', (repair_state or {}).get('attempt', 0))
+        while True:
+            await asyncio.sleep(0)
             result = None
             try:
                 result = await self.hub.generate(ctx.job, ModelRequest(model=model, capability='decision',
@@ -143,7 +155,7 @@ class BuildCapabilities:
                 save()
                 with self.hub.store.transaction() as db:
                     self.hub.store.event(db, ctx.run_id, 'build.output_recovery', {
-                        'step': ctx.step_id, 'strategy': 'incremental', 'max_turns': 12})
+                        'step': ctx.step_id, 'strategy': 'incremental'})
                 return await assemble(self, ctx, model, schema, instruction, content, progress, save, check, tokens)
             except (ValidationError, ContractError, json.JSONDecodeError) as exc:
                 if isinstance(exc, ValidationError):
@@ -166,9 +178,7 @@ class BuildCapabilities:
                 with self.hub.store.transaction() as db:
                     self.hub.store.event(db, ctx.run_id, 'build.validation_failed',
                                          {'step': ctx.step_id, 'attempt': attempt + 1, 'constraint': detail})
-                if attempt + 1 == attempts:
-                    raise ValueError(f'规划输出经过 {attempts} 次校验仍未通过：{detail}') from exc
-        raise ValueError('规划输出纠错次数已用完，请查看校验记录')
+                attempt += 1
 
     async def compile(self, args, ctx):
         from .assistant_builder import BuildDraft
@@ -179,7 +189,7 @@ class BuildCapabilities:
         if 'draft' not in state:
             draft = await self.ask(ctx, args['model'], BuildDraft.model_json_schema(),
                 args['messages'][0]['content'], json.loads(args['messages'][1]['content']),
-                args['max_output_tokens'], check=BuildDraft.model_validate, attempts=3, repair_state=state)
+                args['max_output_tokens'], check=BuildDraft.model_validate, repair_state=state)
             self.checkpoint(ctx, state, draft=draft)
         return {'data': state['draft']}
 
@@ -234,7 +244,8 @@ class BuildCapabilities:
         if not draft.code_candidate:
             return {'draft': draft.model_dump(), 'tools': created,
                     'development': state['development'], 'research': state.get('evidence', [])}
-        while state['attempt'] < 3:
+        while True:
+            await asyncio.sleep(0)
             draft = BuildDraft.model_validate(state['draft'])
             code = draft.code_candidate
             report = None
@@ -304,9 +315,6 @@ class BuildCapabilities:
                 return {'draft': draft.model_dump(), 'tools': [*created, *names], 'development': state['development']}
             except (ValueError, KeyError, PermissionError, ValidationError, SchemaError) as exc:
                 self.checkpoint(ctx, state, last_error=type(exc).__name__ + ': ' + str(exc)[:1500])
-                if state['attempt'] >= 2:
-                    return {'draft': draft.model_dump(), 'tools': [], 'development': state['development'],
-                            'errors': ['自动开发未通过验证：' + str(exc)[:1000]]}
                 revision = first_revision + state['attempt'] + 1
                 repaired = await self.ask(ctx, args['model'], BuildDraft.model_json_schema(),
                     'Repair the generated code and workflow using actual test failures. Preserve tool contracts and expected behavior. '
@@ -317,7 +325,6 @@ class BuildCapabilities:
                      'report': report, 'tested_contracts': state.get('contracts', []),
                      'code_namespace': namespace, 'revision': revision}, check=BuildDraft.model_validate)
                 self.checkpoint(ctx, state, draft=repaired, attempt=state['attempt'] + 1)
-        raise RuntimeError('node development budget exhausted')
 
     def save_nodes(self, code):
         from .node_library import PublishComponent

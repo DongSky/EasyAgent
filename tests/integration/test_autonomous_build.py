@@ -141,11 +141,13 @@ async def test_failed_generated_code_is_never_published(hub):
             return result
     hub.models.register('planner', AlwaysBroken(), 'fixture', ['decision'])
     body = assistant('Sum CSV amounts by customer.')
+    body['limits'] = {'model_calls': 6}
     run = await hub.wait(start_build(hub, 'broken', body)['id'])
-    assert run['status'] == 'succeeded', run
+    assert run['status'] == 'failed', run
     plan = build_status(hub, 'broken', body)
-    assert plan['status'] == 'invalid'
-    assert len(hub.code.list()) == 3
+    assert plan['status'] == 'failed'
+    assert run['usage']['model_calls'] == 6
+    assert len(hub.code.list()) > 3
     assert all(c['status'] == 'failed' for c in hub.code.list())
     assert not hub.extensions.active and not hub.skill_packages.list()
 

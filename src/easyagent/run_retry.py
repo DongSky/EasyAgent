@@ -18,7 +18,7 @@ def legacy_build_budget(spec):
     return bool(spec.get('metadata', {}).get('assistant_builder') and len(steps) == 2
                 and [(s['id'], s.get('target')) for s in steps] == [
                     ('compile', 'development.compile_build'), ('verify', 'development.verify_build')]
-                and limits.get('model_calls') == 8 and limits.get('tool_calls') == 8
+                and limits.get('model_calls') in (8, 24) and limits.get('tool_calls') == 8
                 and limits.get('output_tokens') == 65536)
 
 
@@ -38,13 +38,14 @@ def retry_options(db, run, _nested=False):
     limits = spec.get('limits', {})
     upgrade = legacy_build_budget(spec)
     if upgrade:
-        limits = {**limits, 'model_calls': 24}
-    if not reason and time.time() - run['created'] >= limits.get('wall_time_seconds', 604800):
+        limits = {**limits, 'model_calls': None, 'tool_calls': None, 'output_tokens': None, 'wall_time_seconds': None}
+    wall_time = limits.get('wall_time_seconds')
+    if not reason and wall_time is not None and time.time() - run['created'] >= wall_time:
         reason = '任务总时间预算已用尽，重试不会重置预算。'
     usage = db.execute('SELECT * FROM run_usage WHERE run_id=?', (run['id'],)).fetchone()
-    if not reason and usage and any(usage[field] >= limits.get(limit, default) for field, limit, default in (
-            ('model_calls', 'model_calls', 64), ('tool_calls', 'tool_calls', 256),
-            ('output_reserved', 'output_tokens', 131072), ('child_runs', 'child_runs', 256))):
+    if not reason and usage and any(limits.get(limit) is not None and usage[field] >= limits[limit] for field, limit in (
+            ('model_calls', 'model_calls'), ('tool_calls', 'tool_calls'),
+            ('output_reserved', 'output_tokens'), ('child_runs', 'child_runs'))):
         reason = '任务调用预算已用尽，重试不会重置已使用额度。'
     timeout = any(json.loads(s['retry_state']).get('error', {}).get('category') in
                   ('read_timeout', 'network_timeout', 'step_timeout') or 'Timeout' in (s['error'] or '')
@@ -107,11 +108,14 @@ async def retry_run(hub, run_id, body):
             for target_id in reversed(retry_ids):
                 target = json.loads(db.execute('SELECT spec FROM runs WHERE id=?', (target_id,)).fetchone()[0])
                 if legacy_build_budget(target):
-                    target['limits']['model_calls'] = 24
+                    before = dict(target['limits'])
+                    target['limits'].update(model_calls=None, tool_calls=None, output_tokens=None, wall_time_seconds=None)
+                    for s in target['steps']:
+                        s['timeout_seconds'] = None
+                        db.execute('UPDATE steps SET spec=? WHERE run_id=? AND id=?', (encode(s), target_id, s['id']))
                     db.execute('UPDATE runs SET spec=? WHERE id=?', (encode(target), target_id))
                     hub.store.event(db, target_id, 'build.budget_upgraded', {
-                        'model_calls_before': 8, 'model_calls_after': 24,
-                        'output_tokens': 65536, 'usage_preserved': True})
+                        'limits_before': before, 'limits_after': target['limits'], 'usage_preserved': True})
                 reset_failed_steps(db, target_id, body.longer_wait)
                 hub.store.reconcile(db, target_id)
             hub.store.event(db, run_id, 'run.retried', {'failed_steps': options['failed_steps'],
@@ -127,7 +131,9 @@ def reset_failed_steps(db, run_id, longer_wait):
                          scheduled=False, attempt=0)
             if longer_wait:
                 retry['model_timeout'] = 300
-                retry['step_timeout'] = min(3600, max(600, json.loads(step['spec'])['timeout_seconds'] * 2))
+                timeout = json.loads(step['spec'])['timeout_seconds']
+                if timeout is not None:
+                    retry['step_timeout'] = min(3600, max(600, timeout * 2))
             db.execute("UPDATE steps SET status='queued',error=NULL,ready_at=0,owner=NULL,lease_until=NULL,retry_state=? "
                        'WHERE run_id=? AND id=?', (encode(retry), run_id, step['id']))
         elif step['status'] == 'skipped' and step['error'] == 'dependency failed':

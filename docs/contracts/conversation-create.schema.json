@@ -77,18 +77,30 @@
           "title": "Skill Namespace"
         },
         "max_turns": {
-          "default": 8,
-          "maximum": 64,
-          "minimum": 1,
-          "title": "Max Turns",
-          "type": "integer"
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Turns"
         },
         "max_tool_calls": {
-          "default": 16,
-          "maximum": 128,
-          "minimum": 0,
-          "title": "Max Tool Calls",
-          "type": "integer"
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Tool Calls"
         },
         "max_output_tokens": {
           "default": 2048,

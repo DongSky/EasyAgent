@@ -52,7 +52,7 @@ class Step(Contract):
     input: Json = Field(default_factory=dict)
     depends_on: list[str] = Field(default_factory=list)
     max_attempts: int = Field(default=3, ge=1, le=10)
-    timeout_seconds: float = Field(default=60, gt=0, le=3600)
+    timeout_seconds: float | None = Field(default=60, gt=0, le=3600)
     not_before: float = Field(default=0, ge=0, allow_inf_nan=False)
     requires_approval: bool = False
     when: Json | None = None
@@ -62,18 +62,20 @@ class Step(Contract):
 
     @model_validator(mode="after")
     def reference_kind(self):
+        if self.kind == 'agent' and 'timeout_seconds' not in self.model_fields_set:
+            self.timeout_seconds = None
         if self.workflow_ref and self.kind not in ("subworkflow", "foreach"):
             raise ValueError("workflow_ref requires a subworkflow or foreach step")
         return self
 
 
 class RunLimits(Contract):
-    model_calls: int = Field(default=64, ge=0, le=10000)
-    tool_calls: int = Field(default=256, ge=0, le=10000)
-    output_tokens: int = Field(default=131072, ge=1, le=10000000)
+    model_calls: int | None = Field(default=None, ge=0)
+    tool_calls: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=1)
     cost_usd: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     child_runs: int = Field(default=256, ge=0, le=4096)
-    wall_time_seconds: float = Field(default=604800, gt=0, le=31536000)
+    wall_time_seconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
 
 
 class Workflow(Contract):
@@ -218,8 +220,8 @@ class AgentConfig(Contract):
     skill_access: list[str] = Field(default_factory=list, max_length=100)
     skill_resources: dict[str, dict[str, str]] = Field(default_factory=dict)
     skill_namespace: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,31}$")
-    max_turns: int = Field(default=8, ge=1, le=64)
-    max_tool_calls: int = Field(default=16, ge=0, le=128)
+    max_turns: int | None = Field(default=None, ge=1)
+    max_tool_calls: int | None = Field(default=None, ge=0)
     max_output_tokens: int = Field(default=2048, ge=1, le=32768)
     response_schema: Json | None = None
     policy: str | None = None

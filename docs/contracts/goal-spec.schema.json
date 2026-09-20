@@ -33,25 +33,43 @@
       "additionalProperties": false,
       "properties": {
         "model_calls": {
-          "default": 64,
-          "maximum": 10000,
-          "minimum": 0,
-          "title": "Model Calls",
-          "type": "integer"
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Calls"
         },
         "tool_calls": {
-          "default": 256,
-          "maximum": 10000,
-          "minimum": 0,
-          "title": "Tool Calls",
-          "type": "integer"
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Tool Calls"
         },
         "output_tokens": {
-          "default": 131072,
-          "maximum": 10000000,
-          "minimum": 1,
-          "title": "Output Tokens",
-          "type": "integer"
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Output Tokens"
         },
         "cost_usd": {
           "anyOf": [
@@ -74,11 +92,17 @@
           "type": "integer"
         },
         "wall_time_seconds": {
-          "default": 604800,
-          "exclusiveMinimum": 0,
-          "maximum": 31536000,
-          "title": "Wall Time Seconds",
-          "type": "number"
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Wall Time Seconds"
         }
       },
       "title": "RunLimits",
@@ -148,11 +172,18 @@
           "type": "integer"
         },
         "timeout_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 3600,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
           "default": 60,
-          "exclusiveMinimum": 0,
-          "maximum": 3600,
-          "title": "Timeout Seconds",
-          "type": "number"
+          "title": "Timeout Seconds"
         },
         "not_before": {
           "default": 0,

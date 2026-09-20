@@ -334,8 +334,7 @@ Respond in the user's language. title is only used if creating a new workflow. F
         purpose = state.get('material_text', turn['text'])
         media = [{'name': a['name'], 'kind': a['kind'], 'media_type': a['media_type']} for a in state['attachments']]
         assistant = Assistant(construction='automatic', name=title[:100] or '对话助手', model=state['model'],
-                              purpose=(purpose[:9500] + '\n本次材料类型：' + json.dumps(media, ensure_ascii=False))[:12000],
-                              limits={'model_calls': 16, 'tool_calls': 32, 'output_tokens': 32768}).model_dump()
+                              purpose=(purpose[:9500] + '\n本次材料类型：' + json.dumps(media, ensure_ascii=False))[:12000]).model_dump()
         self.store.memory_put('studio-assistants', identifier, assistant, 'conversation')
         if state.get('previous_draft') or state.get('previous_planned_steps'):
             self.store.memory_put('studio-assistant-drafts', identifier, {'workflow': state.get('previous_draft'),
@@ -476,8 +475,10 @@ Respond in the user's language. title is only used if creating a new workflow. F
                             'WITH RECURSIVE tree(id) AS (SELECT ? UNION ALL SELECT c.child_id FROM child_runs c '
                             "JOIN tree ON c.parent_id=tree.id) SELECT s.retry_state FROM steps s JOIN tree ON s.run_id=tree.id WHERE s.status='failed'",
                             (run['id'],)))
-                if (run['status'] == 'failed' and not transient and phase == 'executing' and state.get('assistant')
-                        and state.get('repair_attempt', 0) < 2):
+                explicit_stop = any(s.get('retry_state', {}).get('error', {}).get('category') in ('budget', 'configuration')
+                                    for s in run['steps'] if s['status'] == 'failed')
+                if (run['status'] == 'failed' and not transient and not explicit_stop
+                        and phase == 'executing' and state.get('assistant')):
                     return self.repair(turn, state, run)
                 state['failed_phase'] = phase
                 state['phase'] = run['status']

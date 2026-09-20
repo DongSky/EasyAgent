@@ -50,6 +50,14 @@ def fingerprint(assistant):
     return hashlib.sha256(encode(assistant).encode()).hexdigest()
 
 
+def task_limits(identifier, assistant):
+    limits = dict(assistant.get('limits', {}))
+    # Older chat-created assistants carried these injected defaults, not user choices.
+    if identifier.startswith('chat-') and [limits.get(k) for k in ('model_calls', 'tool_calls', 'output_tokens')] == [16, 32, 32768]:
+        limits.update(model_calls=None, tool_calls=None, output_tokens=None, wall_time_seconds=None)
+    return limits
+
+
 def stored(hub, namespace, key):
     with hub.store.connect() as db:
         row = db.execute("SELECT value FROM memory WHERE namespace=? AND key=?", (namespace, key)).fetchone()
@@ -218,14 +226,14 @@ multi-stage requests must expose their actual stages. Include a final useful res
             "name": "构建工作流 · " + assistant["name"][:140],
             "metadata": {"assistant_builder": identifier, "step_labels": {
                 "compile": "规划任务与能力", "verify": "查找接口、开发和验证节点"}},
-            "limits": {"model_calls": 24, "tool_calls": 8, "output_tokens": 65536},
+            "limits": task_limits(identifier, assistant),
             "steps": [
                 {
                     "id": "compile",
                     "kind": "tool",
                     "target": "development.compile_build",
                     "max_attempts": 3,
-                    "timeout_seconds": 420,
+                    "timeout_seconds": None,
                     "input": {
                         "model": model,
                         "assistant_id": identifier,
@@ -237,7 +245,7 @@ multi-stage requests must expose their actual stages. Include a final useful res
                     },
                 },
                 {"id": "verify", "target": "development.verify_build", "depends_on": ["compile"],
-                 "max_attempts": 3, "timeout_seconds": 600,
+                 "max_attempts": 3, "timeout_seconds": None,
                  "input": {"draft": {"$ref": "compile.data"}, "assistant_id": identifier,
                            "assistant": assistant, "model": model}},
             ],
@@ -345,7 +353,7 @@ def build_status(hub, identifier, assistant):
         workflow = draft.workflow
         workflow.name = assistant["name"]
         workflow.inputs = {**workflow.inputs, "message": "", "attachment_ids": [], "attachments": []}
-        workflow.limits = type(workflow.limits).model_validate(assistant["limits"])
+        workflow.limits = type(workflow.limits).model_validate(task_limits(identifier, assistant))
         validate_compiled(hub, workflow, build)
         # Persist exact API/extension bindings into the reusable plan, not just at first execution.
         workflow = hub.prepare(workflow)

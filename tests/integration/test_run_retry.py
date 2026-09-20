@@ -157,7 +157,7 @@ async def test_retry_unsafe_writes_and_expired_budget_are_refused(hub):
     with pytest.raises(Conflict):
         await retry_run(hub, run['id'], RetryRequest(expected_updated=run['updated']))
     hub.tools.register(ToolSpec(name='test.read_timeout'), unknown)
-    failed = await hub.wait(hub.submit({'name': 'expired', 'steps': [{'id': 'a', 'target': 'test.read_timeout', 'max_attempts': 1}]}))
+    failed = await hub.wait(hub.submit({'name': 'expired', 'limits': {'wall_time_seconds': 604800}, 'steps': [{'id': 'a', 'target': 'test.read_timeout', 'max_attempts': 1}]}))
     with hub.store.connect() as db:
         db.execute('UPDATE runs SET created=? WHERE id=?', (time.time()-700000, failed['id']))
     with pytest.raises(Conflict, match='时间预算'):

@@ -98,10 +98,9 @@ class Delegation:
                             "input": {
                                 "prompt": args["goal"],
                                 "tools": list(dict.fromkeys([*args.get("tools", []), "agents.reply"])),
-                                "max_turns": 8,
                                 "delegation": child_grant.model_dump(),
                             },
-                            "timeout_seconds": 600,
+                            "timeout_seconds": None,
                         }
                     ],
                 },

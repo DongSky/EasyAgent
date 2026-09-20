@@ -65,11 +65,18 @@
           "type": "integer"
         },
         "timeout_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 3600,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
           "default": 60,
-          "exclusiveMinimum": 0,
-          "maximum": 3600,
-          "title": "Timeout Seconds",
-          "type": "number"
+          "title": "Timeout Seconds"
         },
         "not_before": {
           "default": 0,

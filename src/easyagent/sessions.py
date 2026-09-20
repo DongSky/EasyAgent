@@ -271,7 +271,7 @@ class Conversations:
                                         "id": "agent",
                                         "kind": "agent",
                                         "target": conversation["model"],
-                                        "timeout_seconds": 3600,
+                                        "timeout_seconds": None,
                                         "input": agent,
                                     }
                                 ],

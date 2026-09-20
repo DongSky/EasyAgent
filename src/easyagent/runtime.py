@@ -378,7 +378,10 @@ class Hub:
         work = asyncio.create_task(self.execute(job))
         pulse = asyncio.create_task(self.heartbeat(job))
         try:
-            async with asyncio.timeout(max(job["spec"]["timeout_seconds"], job.get("retry_state", {}).get("step_timeout", 0))):
+            timeout = job['spec']['timeout_seconds']
+            if timeout is not None:
+                timeout = max(timeout, job.get('retry_state', {}).get('step_timeout', 0))
+            async with asyncio.timeout(timeout):
                 done, _ = await asyncio.wait({work, pulse}, return_when=asyncio.FIRST_COMPLETED)
                 if pulse in done:
                     pulse.result()
@@ -633,7 +636,7 @@ class Hub:
                     raise PermissionError("model requested a tool outside the allowlist: " + call["name"])
                 # Count a logical call once, before its first execution, including approval pauses.
                 if not call.get("counted"):
-                    if state["tool_count"] >= config.max_tool_calls:
+                    if config.max_tool_calls is not None and state["tool_count"] >= config.max_tool_calls:
                         raise ValueError("agent tool-call budget exhausted")
                     state["tool_count"] += 1
                     call["counted"] = True
@@ -660,7 +663,7 @@ class Hub:
                 )
                 state["pending_index"] += 1
                 self.store.checkpoint(job, state)
-            if state["turns"] >= config.max_turns:
+            if config.max_turns is not None and state["turns"] >= config.max_turns:
                 raise ValueError("agent model-call budget exhausted")
             await self.compact_for_model(job, state, config, model)
             state["turns"] += 1
@@ -730,8 +733,6 @@ class Hub:
             kind = 'context_overflow'
         elif isinstance(exc, ModelResponseError) and exc.output_limited:
             count = state.get('output_recoveries', 0)
-            if count >= 2:
-                return False
             state['output_recoveries'] = count + 1
             state['messages'].append({'role': 'user', 'content':
                 'The previous response hit the output limit. None of its tool calls were executed. '
@@ -825,12 +826,25 @@ class Hub:
             price_known = isinstance(binding.provider, MockProvider) or (
                 binding.input_price_per_million is not None and binding.output_price_per_million is not None
             )
-            max_cost = (
-                (binding.input_price_per_million or 0) * estimated_input
-                + (binding.output_price_per_million or 0) * request.max_output_tokens
-            ) / 1_000_000
             with self.store.transaction() as db:
                 self.store.assert_owner(db, job)
+                # A request's max_output_tokens is a ceiling, not a minimum. Use the
+                # remaining allowance instead of rejecting a still-viable continuation.
+                remaining, ancestor = request.max_output_tokens, job['run_id']
+                while ancestor:
+                    spec = json.loads(db.execute('SELECT spec FROM runs WHERE id=?', (ancestor,)).fetchone()[0])
+                    used = db.execute('SELECT output_reserved FROM run_usage WHERE run_id=?', (ancestor,)).fetchone()
+                    cap = spec.get('limits', {}).get('output_tokens')
+                    if cap is not None:
+                        remaining = min(remaining, cap - (used[0] if used else 0))
+                    parent = db.execute('SELECT parent_id FROM child_runs WHERE child_id=?', (ancestor,)).fetchone()
+                    ancestor = parent[0] if parent else None
+                if remaining > 0:
+                    request = request.model_copy(update={'max_output_tokens': remaining})
+                max_cost = (
+                    (binding.input_price_per_million or 0) * estimated_input
+                    + (binding.output_price_per_million or 0) * request.max_output_tokens
+                ) / 1_000_000
                 self.store.reserve(db, job["run_id"], "model_calls")
                 self.store.reserve(db, job["run_id"], "output_reserved", request.max_output_tokens)
                 if (request.capability in ("image", "embedding") or request.attachments) and not isinstance(
@@ -950,7 +964,8 @@ class Hub:
                 accounted = db.execute(
                     "SELECT output_reserved,cost FROM run_usage WHERE run_id=?", (job["run_id"],)
                 ).fetchone()
-                exceeded = accounted[0] > spec.get("limits", {}).get("output_tokens", 131072)
+                output_cap = spec.get('limits', {}).get('output_tokens')
+                exceeded = output_cap is not None and accounted[0] > output_cap
                 cost_cap = spec.get("limits", {}).get("cost_usd")
                 exceeded = exceeded or cost_cap is not None and accounted[1] > cost_cap
             if exceeded:
@@ -1034,7 +1049,7 @@ class Hub:
                 if action["tool"] not in config.tools:
                     raise PermissionError("planner requested an unauthorized tool")
                 if not action.get("counted"):
-                    if state["tool_count"] >= config.max_tool_calls:
+                    if config.max_tool_calls is not None and state["tool_count"] >= config.max_tool_calls:
                         raise ValueError("planner tool budget exhausted")
                     state["tool_count"] += 1
                     action["counted"] = True
@@ -1062,7 +1077,7 @@ class Hub:
                 index += 1
                 state["plan_index"] = index
                 self.store.checkpoint(job, state)
-            if state["turns"] >= config.max_turns:
+            if config.max_turns is not None and state["turns"] >= config.max_turns:
                 raise ValueError("planner model budget exhausted")
             state["turns"] += 1
             await self.compact_for_model(job, state, config, model)

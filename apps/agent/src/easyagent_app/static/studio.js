@@ -3,8 +3,8 @@ import {goalResult} from './goals.js?v=20260920-nodes-1';
 import {toolLabel} from './ui-labels.js';
 import { graphEditor } from './graph-editor.js';
 import {runHistory} from './run-history.js';
-import {stepStatus} from './run-status.js?v=20260921-retry-context-3';
-import {retryPanel,bindRetry,retryProgress,readableError} from './run-retry.js?v=20260921-retry-context-3';
+import {stepStatus} from './run-status.js?v=20260921-continuous-4';
+import {retryPanel,bindRetry,retryProgress,readableError} from './run-retry.js?v=20260921-continuous-4';
 
 let shell=null;
 let token="", tools=[], models=[], skills=[], nodes=[], editingWorkflow=null;
@@ -105,7 +105,7 @@ const refreshAdvanced=advanced({api,$,guard,flash,models:()=>models,load:()=>loa
 async function loadAdvanced(){await refreshAdvanced();savedWorkflowRows=advancedState.workflows;}
 async function load(){const selected=$('newTool').value;await loadBase();await loadAdvanced();if([...$('newTool').options].some(o=>o.value===selected))$('newTool').value=selected;renderNodes();}
 $('addAdvanced').onclick=guard(()=>{graph.flush();syncNodes();addNode($('nodeKind').value)});
-import { noCodeBuilder } from './no-code.js?v=20260921-retry-context-3';
+import { noCodeBuilder } from './no-code.js?v=20260921-continuous-4';
 import { workflowSharing } from './workflow-sharing.js?v=20260920-nodes-1';
 const sharing=workflowSharing({api,$,escape,download,token:()=>token,flash,loadWorkflow,reload:loadBase,showTab});
 $('shareWorkflow').onclick=guard(()=>sharing.share(workflow()));
@@ -119,7 +119,7 @@ import {conversationStudio} from './conversations.js?v=20260920-nodes-1';
 conversationStudio({api,escape,flash,showTab,watch});
 import {extensionStudio} from './extensions.js?v=20260920-nodes-1';
 extensionStudio({api,escape,flash,load,showTab,watch,token:()=>token,download});
-import {connectionStudio} from './connections.js?v=20260921-retry-context-3';
+import {connectionStudio} from './connections.js?v=20260921-continuous-4';
 connectionStudio({api,escape,flash,showTab,load});
 import {learningStudio} from './learning.js?v=20260920-nodes-1';
 learningStudio({api,escape,flash,showTab,load});
@@ -131,7 +131,7 @@ import {backendSettings} from './backend-settings.js?v=20260920-local-1';
 backendSettings({api,escape,flash});
 import {voiceStudio} from './voice.js';
 voiceStudio({api,escape,flash,token:()=>token});
-import {workspaceChat} from './workspace-chat.js?v=20260921-retry-context-3';
+import {workspaceChat} from './workspace-chat.js?v=20260921-continuous-4';
 workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,loadWorkflow,token:()=>token,download,statuses});
 import {workspaceUI} from './workspace-ui.js?v=20260920-nodes-1';
 shell=workspaceUI({api,escape,flash,showTab,renderRunHistory,listWorkflows});

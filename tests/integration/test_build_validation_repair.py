@@ -64,15 +64,15 @@ async def test_initial_plan_repairs_invalid_output_before_verification(hub, prob
     assert not hub.code.list()
 
 
-async def test_invalid_plan_stops_after_three_calls_without_publishing(hub):
+async def test_invalid_plan_obeys_explicit_limit_without_publishing(hub):
     model = InvalidFirst('timeout', always=True)
     hub.models.register('planner', model, 'fixture', ['decision'])
     body = assistant('保留任务但不要执行无效规划。')
+    body['limits'] = {'model_calls': 3}
     run = await hub.wait(start_build(hub, 'never-valid', body)['id'])
     assert run['status'] == 'failed'
     assert len(model.calls) == 3 and run['usage']['model_calls'] == 3
-    assert '3 次校验' in run['steps'][0]['error']
-    assert 'maximum=3600' in run['steps'][0]['error']
+    assert run['steps'][0]['retry_state']['error']['category'] == 'budget'
     assert len(run['steps'][0]['error']) < 500
     assert run['steps'][1]['status'] == 'skipped'
     assert not hub.development.workflows() and not hub.code.list()

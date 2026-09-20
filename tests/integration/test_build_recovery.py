@@ -1,4 +1,5 @@
 import json
+import asyncio
 
 import httpx
 import pytest
@@ -95,7 +96,7 @@ async def test_segmented_build_preserves_branches_inputs_and_saved_progress_afte
     assert sum(e['kind'] == 'build.output_recovery' for e in hub.store.events(run['id'])) == 1
 
 
-async def test_segment_recovery_is_bounded_and_does_not_publish_invalid_draft(hub):
+async def test_segment_recovery_respects_explicit_limit_and_does_not_publish_invalid_draft(hub):
     class Builder:
         async def generate(self, request, model):
             if request.response_schema['title'] == 'BuildDraft':
@@ -104,10 +105,11 @@ async def test_segment_recovery_is_bounded_and_does_not_publish_invalid_draft(hu
 
     hub.models.register('planner', Builder(), 'fixture', ['decision'])
     body = assistant('never accept an empty draft')
+    body['limits'] = {'model_calls': 13}
     run = await hub.wait(start_build(hub, 'invalid-segments', body)['id'])
     assert run['status'] == 'failed'
     assert run['usage']['model_calls'] == 13
-    assert '12 轮' in run['steps'][0]['error']
+    assert run['steps'][0]['retry_state']['error']['category'] == 'budget'
     assert not hub.development.workflows() and not hub.code.list()
 
 
@@ -192,15 +194,16 @@ async def test_legacy_builder_retry_migrates_default_limit_without_resetting_usa
     identifier = start_build(hub, 'legacy', body)['id']
     with hub.store.transaction() as db:
         spec = json.loads(db.execute('SELECT spec FROM runs WHERE id=?', (identifier,)).fetchone()[0])
-        spec['limits']['model_calls'] = 8
+        spec['limits'].update(model_calls=8, tool_calls=8, output_tokens=65536)
         db.execute('UPDATE runs SET spec=? WHERE id=?', (encode(spec), identifier))
     failed = await hub.wait(identifier)
     assert failed['status'] == 'failed' and failed['steps'][0]['retry_state']['error']['category'] == 'budget'
     assert calls == 8 and failed['retry']['allowed'] and failed['retry']['build_budget_upgrade']
     resumed = await retry_run(hub, identifier, RetryRequest(expected_updated=failed['updated']))
     assert resumed['usage'] == failed['usage']
-    assert resumed['spec']['limits']['model_calls'] == 24
-    assert resumed['spec']['limits']['output_tokens'] == failed['spec']['limits']['output_tokens']
+    assert resumed['spec']['limits']['model_calls'] is None
+    assert resumed['spec']['limits']['output_tokens'] is None
+    assert all(s['spec']['timeout_seconds'] is None for s in resumed['steps'])
     completed = await hub.wait(identifier)
     assert completed['status'] == 'succeeded', completed
     assert calls == 9
@@ -252,3 +255,97 @@ async def test_generated_runtime_type_error_is_fed_back_and_repaired(hub):
     assert plan['status'] == 'ready', plan
     assert provider.observed_type_error
     assert [r['passed'] for r in plan['development']] == [False, True]
+
+
+async def test_model_continuation_uses_remaining_output_allowance_instead_of_failing_early(hub):
+    ceilings = []
+
+    class Provider:
+        async def generate(self, request, model):
+            ceilings.append(request.max_output_tokens)
+            return ModelResult(text='done', usage={'input_tokens': 1, 'output_tokens': 6 if len(ceilings) == 1 else 2})
+
+    hub.models.register('planner', Provider(), 'fixture', ['chat'])
+    run = await hub.wait(hub.submit({'name': 'use available capacity', 'limits': {'output_tokens': 10}, 'steps': [
+        {'id': 'first', 'kind': 'model', 'target': 'planner', 'input': {'prompt': 'first'}},
+        {'id': 'second', 'kind': 'model', 'target': 'planner', 'depends_on': ['first'], 'input': {'prompt': 'finish'}}]}))
+    assert run['status'] == 'succeeded', run
+    assert ceilings == [10, 4]
+    assert run['usage']['output_reserved'] == 8 and run['spec']['limits']['output_tokens'] == 10
+
+
+async def test_default_builder_completes_past_previous_call_segment_and_output_caps(hub):
+    calls = 0
+
+    class Builder:
+        async def generate(self, request, model):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise ModelResponseError('length')
+            if calls == 2:
+                edits = [{'op': 'set', 'path': [], 'value': {
+                    'workflow': {'name': 'large graph', 'steps': []}, 'explanation': 'Complete all stages'}}]
+            else:
+                edits = [{'op': 'append', 'path': ['workflow', 'steps'], 'value': {
+                    'id': 'stage'+str(calls), 'target': 'core.echo'}}]
+            return ModelResult(data={'edits': edits, 'done': calls == 70},
+                               usage={'input_tokens': 100, 'output_tokens': 3000})
+
+    hub.models.register('planner', Builder(), 'fixture', ['decision'])
+    body = assistant('Complete a large graph without arbitrary construction caps')
+    run = await hub.wait(start_build(hub, 'large-build', body)['id'])
+    assert run['status'] == 'succeeded', run
+    assert run['usage']['model_calls'] == 70 and run['usage']['output_reserved'] > 131072
+    assert all(run['spec']['limits'][key] is None for key in ('model_calls', 'tool_calls', 'output_tokens', 'wall_time_seconds'))
+    plan = build_status(hub, 'large-build', body)
+    assert plan['status'] == 'ready' and len(plan['workflow']['steps']) == 68
+
+
+async def test_unlimited_builder_remains_cancellable_without_publishing_a_draft(hub):
+    entered, cancelled = asyncio.Event(), asyncio.Event()
+
+    class Builder:
+        async def generate(self, request, model):
+            if request.response_schema['title'] == 'BuildDraft':
+                raise ModelResponseError('length')
+            entered.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+    hub.models.register('planner', Builder(), 'fixture', ['decision'])
+    identifier = start_build(hub, 'cancel-build', assistant('Wait until stopped'))['id']
+    await asyncio.wait_for(entered.wait(), 5)
+    hub.store.cancel(identifier)
+    await asyncio.wait_for(cancelled.wait(), 5)
+    assert hub.store.run(identifier)['status'] == 'cancelled'
+    assert not hub.development.workflows() and not hub.code.list()
+
+
+async def test_schema_upgrade_resumes_legacy_segment_without_replanning(hub):
+    from easyagent.assistant_builder import BuildDraft
+    observed = []
+
+    class Builder:
+        async def generate(self, request, model):
+            assert request.response_schema['title'] == 'BuildEdits'
+            content = json.loads(request.messages[-1]['content'])
+            observed.append(content['draft']['workflow']['steps'][0]['id'])
+            return ModelResult(data={'edits': [], 'done': True})
+
+    async def resume(args, ctx):
+        state = {'build_requests': {'previous-schema-hash': {'segments': {'turns': 10, 'draft': {
+            'workflow': {'name': 'saved', 'steps': [{'id': 'saved-step', 'target': 'core.echo'}]},
+            'explanation': 'Keep the previously assembled graph', 'questions': []}}}}}
+        hub.store.checkpoint(ctx.job, state)
+        return await hub.build_capabilities.ask(ctx, 'planner', BuildDraft.model_json_schema(),
+            'finish saved draft', {}, check=BuildDraft.model_validate)
+
+    hub.models.register('planner', Builder(), 'fixture', ['decision'])
+    hub.tools.register(ToolSpec(name='test.resume_schema'), resume)
+    run = await hub.wait(hub.submit({'name': 'upgraded schema', 'steps': [{'id': 'resume', 'target': 'test.resume_schema'}]}))
+    assert run['status'] == 'succeeded', run
+    assert observed == ['saved-step'] and run['usage']['model_calls'] == 1

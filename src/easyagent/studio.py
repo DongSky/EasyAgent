@@ -25,8 +25,8 @@ class Assistant(Contract):
     knowledge: list[str] = Field(default_factory=list)
     memory_namespaces: list[str] = Field(default_factory=list)
     strategy: Literal["react", "plan_execute"] = "react"
-    max_turns: int = Field(default=8, ge=1, le=64)
-    max_tool_calls: int = Field(default=16, ge=0, le=128)
+    max_turns: int | None = Field(default=None, ge=1)
+    max_tool_calls: int | None = Field(default=None, ge=0)
     context_chars: int | None = Field(default=None, ge=4000, le=500000)
     policy: str | None = None
     capability: Literal["chat", "image", "embedding"] = "chat"
