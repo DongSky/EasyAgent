@@ -1,5 +1,9 @@
 import asyncio
+import os
 import socket
+import sys
+import threading
+import traceback
 from contextlib import asynccontextmanager
 
 import pytest
@@ -9,6 +13,30 @@ from easyagent.api import create_app
 from easyagent.runtime import Hub
 from easyagent.studio import install_studio
 from easyagent_app import mount_app
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    # Include setup/teardown, where an unresponsive subprocess can otherwise hang CI
+    # for hours. asyncio timeouts cannot interrupt a blocked event-loop thread.
+    timer = None
+    if os.environ.get('GITHUB_ACTIONS') == 'true':
+        def expired():
+            message = f'Test exceeded 120 seconds (including fixtures): {item.nodeid}'
+            print('::error::' + message, file=sys.stderr, flush=True)
+            for identifier, frame in sys._current_frames().items():
+                print(f'Thread {identifier}:', file=sys.stderr)
+                traceback.print_stack(frame, file=sys.stderr)
+            sys.stderr.flush()
+            os._exit(1)
+        timer = threading.Timer(120, expired)
+        timer.daemon = True
+        timer.start()
+    try:
+        yield
+    finally:
+        if timer:
+            timer.cancel()
 
 
 @asynccontextmanager

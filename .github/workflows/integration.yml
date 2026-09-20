@@ -1,7 +1,11 @@
 name: Integration
 on: [push, pull_request]
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   integration:
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
