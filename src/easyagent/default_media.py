@@ -82,6 +82,7 @@ def install(hub, identifier, options):
     definition = HTTPTool(name=name, description=description, url=root + recipe['path'],
         method='GET' if is_wait else 'POST', input_schema=recipe['input_schema'],
         request_encoding='multipart' if multipart else 'json', file_parameters=['image', 'mask'] if multipart else [],
+        max_upload_bytes=50_000_000 if multipart else 10_000_000,
         artifact_url_parameters=['content.*.image_url.url'] if identifier.endswith('video_submit') else [],
         response_mode='json' if is_wait else 'media', max_response_bytes=1_000_000 if is_wait else 10_000_000,
         timeout_seconds=120, effect='read' if is_wait else 'write', idempotent=is_wait,

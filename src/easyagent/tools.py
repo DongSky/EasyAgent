@@ -26,6 +26,14 @@ class ToolInputError(ValueError):
     """Rejected before any handler execution; safe to return for model correction."""
 
 
+class ToolPreparationError(ValueError):
+    """Trusted adapter rejected the request before any external transmission."""
+
+
+class ToolRejectedError(ValueError):
+    """The remote endpoint explicitly rejected the upload without performing it."""
+
+
 def validate_input(arguments, schema):
     from jsonschema import ValidationError
 
@@ -229,7 +237,8 @@ class ToolRegistry:
                 except Exception:
                     pass  # Reporting cannot change the original side-effect classification.
             # Leave non-idempotent started calls unresolved on cancellation or crash.
-            if spec.effect == "write" and not spec.idempotent:
+            not_performed = isinstance(exc, (ToolPreparationError, ToolRejectedError))
+            if spec.effect == "write" and not spec.idempotent and not not_performed:
                 if isinstance(exc, asyncio.CancelledError):
                     raise
                 with store.transaction() as db:
@@ -243,8 +252,14 @@ class ToolRegistry:
                 store.assert_owner(db, job)
                 db.execute(
                     "UPDATE invocations SET status='failed',error=? WHERE id=?",
-                    (type(exc).__name__, invocation_id),
+                    (str(exc) if not_performed else type(exc).__name__, invocation_id),
                 )
+                if isinstance(exc, ToolPreparationError):
+                    store.event(db, job['run_id'], 'tool.not_sent',
+                                {'invocation_id': invocation_id, 'reason': str(exc)})
+                elif isinstance(exc, ToolRejectedError):
+                    store.event(db, job['run_id'], 'tool.rejected',
+                                {'invocation_id': invocation_id, 'reason': str(exc)})
             raise
         with store.transaction() as db:
             store.assert_owner(db, job)

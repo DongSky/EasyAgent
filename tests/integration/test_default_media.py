@@ -209,3 +209,82 @@ async def test_video_rebind_keeps_wait_on_same_connection(api):
         assert again == first
         assert hub.library.get('library.media.video_wait').source == original_wait.source
         assert not hub.store.runs()
+
+
+async def test_large_original_upload_and_preflight_failure_are_distinct_from_uncertain_write(api):
+    from fastapi.responses import JSONResponse
+    url, hub = api
+    remote, requests = FastAPI(), []
+    content = b'original-image-fixture' + b'x' * 10_000_000
+    original = hub.artifacts.put('large-original.png', content, 'image/png')
+
+    @remote.post('/v1/images/edits')
+    async def edit(request: Request):
+        body = await request.body()
+        assert content in body
+        requests.append(len(body))
+        if len(requests) == 2:
+            return JSONResponse({'error': {'message': 'upstream failed after request received'}}, status_code=500)
+        if len(requests) == 3:
+            return JSONResponse({'error': {'message': 'request too large'}}, status_code=413)
+        return {'data': [{'url': 'https://example.com/edited.png'}]}
+
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+        await client.post('/v1/studio/connections', json={'alias': 'large-image', 'base_url': endpoint+'/v1',
+                          'model': 'image-fixture', 'capabilities': ['image']})
+        hub.library.install('library.media.image_edit', {'connection': 'large-image'})
+        step = hub.library.instantiate('library.media.image_edit', {'input': {
+            'image': original['id'], 'prompt': 'retouch'}})['step']
+        source = hub.development.get('api', step['target'])
+        assert source['definition']['max_upload_bytes'] == 50_000_000
+        hub.development.save_api({**source['definition'], 'name': 'fixture.small_upload', 'max_upload_bytes': 10_000_000})
+        limited = {**step, 'target': 'fixture.small_upload', 'tool_revision': 1}
+        failed = hub.submit({'name': 'local rejection', 'steps': [limited]})
+        await approve(hub, failed)
+        result = await hub.wait(failed)
+        assert result['status'] == 'failed', result
+        assert '请求未发送' in result['steps'][0]['error'] and '10 MB' in result['steps'][0]['error']
+        assert not requests and not result['approvals']
+        with hub.store.connect() as db:
+            assert db.execute('SELECT status FROM invocations WHERE run_id=?', (failed,)).fetchone()[0] == 'failed'
+
+        succeeded = hub.submit({'name': 'large original', 'steps': [step]})
+        await approve(hub, succeeded)
+        result = await hub.wait(succeeded)
+        assert result['status'] == 'succeeded', result
+        assert len(requests) == 1 and hub.artifacts.get(original['id'])[1] == content
+
+        uncertain = hub.submit({'name': 'remote error', 'steps': [step]})
+        await approve(hub, uncertain)
+        result = await hub.wait(uncertain)
+        assert result['status'] == 'needs_attention', result
+        assert len(requests) == 2 and result['approvals'][0]['status'] == 'uncertain'
+
+        rejected = hub.submit({'name': 'explicit upload rejection', 'steps': [step]})
+        await approve(hub, rejected)
+        result = await hub.wait(rejected)
+        assert result['status'] == 'failed', result
+        assert 'HTTP 413' in result['steps'][0]['error'] and not result['approvals']
+        assert len(requests) == 3
+
+
+async def test_prepare_image_creates_bounded_copy_preserving_original(hub):
+    import io
+    from PIL import Image
+    image = Image.effect_noise((1024, 768), 100).convert('RGB')
+    encoded = io.BytesIO()
+    image.save(encoded, format='PNG')
+    original = hub.artifacts.put('original.png', encoded.getvalue(), 'image/png')
+    run = await hub.wait(hub.submit({'name': 'prepare upload copy', 'steps': [
+        {'id': 'prepare', 'target': 'attachments.prepare_image', 'input': {
+            'artifact_id': original['id'], 'max_bytes': 64000, 'max_side': 512}}]}))
+    assert run['status'] == 'succeeded', run
+    result = run['steps'][0]['output']
+    info, content = hub.artifacts.get(result['artifact']['id'])
+    assert info['media_type'] == 'image/jpeg' and info['size'] <= 64000
+    assert result['original']['id'] == original['id'] and info['id'] != original['id']
+    assert hub.artifacts.get(original['id'])[1] == encoded.getvalue()
+    prepared = Image.open(io.BytesIO(content))
+    assert prepared.width <= 512 and prepared.height <= 512
+    assert abs(prepared.width / prepared.height - 1024 / 768) < .02
+    assert not run['approvals'] and run['usage']['model_calls'] == 0

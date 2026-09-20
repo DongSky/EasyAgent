@@ -26,7 +26,8 @@ mcp = ["mcp>=1.20,<2"]
 code = ["quickjs>=1.19,<2", "wasmtime>=30,<40"]
 browser = ["playwright>=1.50,<2"]
 documents = ["pypdf>=5,<7"]
-app = ["easyagent-app==0.1.0", "easyagent[server,code,browser,documents]==0.1.0"]
+media = ["Pillow>=12,<13"]
+app = ["easyagent-app==0.1.0", "easyagent[server,code,browser,documents,media]==0.1.0"]
 dev = ["pytest>=8,<10", "pytest-asyncio>=0.25,<2", "ruff>=0.11,<1"]
 desktop = [
     "pyinstaller>=6,<7",

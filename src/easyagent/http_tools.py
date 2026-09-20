@@ -13,6 +13,7 @@ import httpx
 from pydantic import Field, model_validator
 
 from .contracts import Contract, ToolSpec
+from .tools import ToolPreparationError, ToolRejectedError
 
 
 class Polling(Contract):
@@ -43,6 +44,7 @@ class HTTPTool(Contract):
     body_parameter: str | None = None
     request_encoding: Literal["json", "form", "multipart"] = "json"
     file_parameters: list[str] = Field(default_factory=list)
+    max_upload_bytes: int = Field(default=10_000_000, ge=1, le=50_000_000)
     artifact_url_parameters: list[str] = Field(default_factory=list, max_length=40)
     response_mode: Literal["json", "text", "artifact", "media"] = "json"
     artifact_name: str = Field(default="response.bin", min_length=1, max_length=200)
@@ -136,7 +138,7 @@ def build_http_tool(definition, validate_arguments=None):
                     output_schema=definition.output_schema, effect=effect,
                     idempotent=True if effect == "read" else definition.idempotent)
 
-    async def call(arguments, context):
+    async def send(arguments, context, transport):
         poll_state = None
         if definition.polling:
             if not context.store or not context.job:
@@ -236,8 +238,10 @@ def build_http_tool(definition, validate_arguments=None):
                                 raise ValueError("upload files by artifact id, never host file paths")
                             info, content = Artifacts(context.store).get(identifier)
                             total_bytes += len(content)
-                            if total_bytes > 10_000_000:
-                                raise ValueError("multipart files exceed 10 MB")
+                            if total_bytes > definition.max_upload_bytes:
+                                raise ToolPreparationError(
+                                    f'请求未发送：附件合计 {total_bytes / 1_000_000:.1f} MB，'
+                                    f'超过此节点 {definition.max_upload_bytes / 1_000_000:g} MB 的上传限制。')
                             parts.append((name, (info["name"], content, info["media_type"])))
                     elif value is not None:
                         parts.append((name, (None, value if isinstance(value, str) else json.dumps(value))))
@@ -271,6 +275,7 @@ def build_http_tool(definition, validate_arguments=None):
 
         try:
             async with httpx.AsyncClient(timeout=definition.timeout_seconds, follow_redirects=False, cookies=cookies) as client:
+                transport['started'] = True
                 async with client.stream(definition.method, url, headers=headers, **kwargs) as response:
                     if context.store:
                         with context.store.transaction() as db:
@@ -301,6 +306,8 @@ def build_http_tool(definition, validate_arguments=None):
                                     })
                         except (ValueError, UnicodeError):
                             pass
+                        if response.status_code == 413:
+                            raise ToolRejectedError('服务拒绝上传：HTTP 413（文件太大）。请保留原图，使用较小的上传副本重试。')
                         error = RuntimeError if response.status_code in (408, 429) or response.status_code >= 500 else ValueError
                         raise error(f"configured API returned HTTP {response.status_code}")
                     result = bytearray()
@@ -353,6 +360,18 @@ def build_http_tool(definition, validate_arguments=None):
             raise RuntimeError("configured API timed out") from None
         except httpx.HTTPError:
             raise RuntimeError("configured API transport failed") from None
+
+    async def call(arguments, context):
+        transport = {'started': False}
+        try:
+            return await send(arguments, context, transport)
+        except (ValueError, KeyError, TypeError) as exc:
+            if transport['started'] or isinstance(exc, ToolPreparationError):
+                raise
+            # No provider call has started. Do not mislabel missing files or malformed
+            # request arguments as an uncertain external write, or echo private data.
+            raise ToolPreparationError('请求未发送：请检查附件是否存在、参数格式和连接配置。'
+                                       f'（{type(exc).__name__}）') from exc
     return spec, call
 
 

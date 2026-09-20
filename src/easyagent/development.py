@@ -258,12 +258,17 @@ class RuntimeDevelopment:
                     disabled = db.execute("SELECT 1 FROM memory WHERE namespace='disabled-model-adapters' AND key=?",
                                           (f'{name}@{version}',)).fetchone()
                 if disabled:
-                    raise ValueError('模型连接已修改或删除，请重新生成工作流以使用当前连接')
+                    from .tools import ToolPreparationError
+                    raise ToolPreparationError('请求未发送：模型连接已修改或删除，请重新生成工作流以使用当前连接')
                 configured = definition.model_copy(deep=True)
                 if configured.api_key_env and (key := self.credential(configured.api_key_env, name, version)):
                     configured.api_key = key
                     configured.api_key_env = None
-                _, handler = build_http_tool(configured)
+                try:
+                    _, handler = build_http_tool(configured)
+                except ValueError as exc:
+                    from .tools import ToolPreparationError
+                    raise ToolPreparationError('请求未发送：API 连接配置或凭证不可用，请检查服务设置。') from exc
                 return await handler(arguments, context)
 
             registry.versions[name, version] = (spec, call)

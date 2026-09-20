@@ -1,3 +1,4 @@
+import {stepStatus} from './run-status.js';
 import {modelChoices} from './model-choice.js';
 import {toolLabels} from './ui-labels.js';
 import {formatChat} from './chat-format.js';
@@ -125,13 +126,14 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
     const statusOf=step=>terminal&&step.status==='running'?run.status:step.status;
     const icons={running:'◌',succeeded:'✓',failed:'!',waiting_approval:'Ⅱ',waiting_input:'Ⅱ',needs_attention:'!',waiting_remote:'…',waiting_children:'…',cancelled:'−',skipped:'−'};
     graph.querySelectorAll('[data-node]').forEach(button=>{
-      const status=statusOf(byId.get(button.dataset.node)),previous=button.dataset.status;
+      const step=byId.get(button.dataset.node),status=statusOf(step),previous=button.dataset.status;
+      const label=stepStatus(run,{...step,status},statuses);
+      button.querySelector('small').textContent=label;
+      button.setAttribute('aria-label',button.querySelector('b').textContent+' · '+label);
       if(previous===status)return;
       button.dataset.status=status;
       button.className='chat-node state-'+status;
       button.querySelector('.chat-node-indicator').textContent=icons[status]||'·';
-      button.querySelector('small').textContent=statuses[status]||status;
-      button.setAttribute('aria-label',button.querySelector('b').textContent+' · '+(statuses[status]||status));
       if(!rebuilt&&previous&&status==='succeeded'&&!reducedMotion.matches)button.classList.add('just-completed');
     });
     graph.querySelectorAll('.chat-edge').forEach(edge=>{
@@ -181,7 +183,7 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
       find('[data-edit]').hidden=!state.selected;find('[data-edit]').onclick=guard(async()=>{const saved=await api(`/v1/studio/workflows/${encodeURIComponent(state.selected.id)}?revision=${state.selected.revision}`);loadWorkflow(saved.workflow,saved);showTab('workflow');});
       find('[data-details-toggle]').hidden=!run;
       if(run){
-        const wait=['waiting_approval','waiting_input','needs_attention'].includes(run.status),detailKey=JSON.stringify([run.status,run.approvals,run.input_requests,run.reconciliations,run.steps.map(s=>[s.id,s.status])]);
+        const wait=['waiting_approval','waiting_input','needs_attention'].includes(run.status),detailKey=JSON.stringify([run.status,run.approvals,run.input_requests,run.reconciliations,run.steps.map(s=>[s.id,s.status]),run.children]);
         if(wait&&entry.lastDetail!==detailKey){entry.details.hidden=false;find('[data-details-toggle]').setAttribute('aria-expanded','true');find('[data-details-toggle]').textContent='收起步骤与结果';}
         if(!entry.details.hidden&&entry.lastDetail!==detailKey){renderRun(run,entry.details);entry.lastDetail=detailKey;}
         if(run.status==='succeeded'&&state.phase==='completed'&&entry.lastMedia!==run.id){

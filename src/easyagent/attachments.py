@@ -28,6 +28,8 @@ class Attachments:
             input_schema={'type': 'object', 'properties': {'artifact_id': {'type': 'string'}}, 'required': ['artifact_id'], 'additionalProperties': False},
             output_schema={'type': 'object'},
         ), read)
+        from .image_preparation import install
+        install(hub)
 
     def describe(self, identifier):
         with self.hub.store.connect() as db:

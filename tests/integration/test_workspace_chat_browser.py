@@ -12,6 +12,44 @@ from easyagent.contracts import ToolSpec
 from easyagent.models import HTTPProvider
 
 
+async def test_nested_wait_labels_show_the_actual_blocker(api):
+    from easyagent.contracts import ModelResult
+    url, hub = api
+
+    class Router:
+        async def generate(self, request, model):
+            return ModelResult(data={'action': 'use', 'candidate': 'nested@1', 'confidence': 1,
+                                     'message': '执行已保存的流程。', 'inputs': {}})
+
+    async def uncertain(args, ctx):
+        raise RuntimeError('fixture: request sent, result unknown')
+
+    hub.models.register('router', Router(), 'fixture', ['decision'])
+    hub.tools.register(ToolSpec(name='fixture.write', effect='write', idempotent=False), uncertain)
+    hub.development.save_workflow('nested', {'name': '嵌套状态', 'metadata': {'step_labels': {
+        'edit': '逐张编辑原图', 'save': '保存关联清单'}}, 'steps': [
+        {'id': 'edit', 'kind': 'foreach', 'input': {'items': [1]}, 'body': {'name': '单张处理', 'steps': [
+            {'id': 'submit', 'target': 'fixture.write'}]}},
+        {'id': 'save', 'kind': 'transform', 'depends_on': ['edit']}]})
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch()
+        page = await browser.new_page()
+        try:
+            await page.goto(url+'/#conversations')
+            await page.locator('#workspaceMessage').fill('运行嵌套流程')
+            await page.locator('#conversations [data-send]').click()
+            await expect(page.locator('[data-node="edit"] small')).to_have_text('子流程等待确认执行', timeout=15000)
+            await expect(page.locator('[data-node="save"] small')).to_have_text('等待前置步骤：逐张编辑原图')
+            await expect(page.locator('.chat-task-details')).to_contain_text('子流程等待确认执行')
+            await page.locator('[data-approve]').click()
+            await expect(page.locator('[data-node="edit"] small')).to_have_text('子流程结果不明，需核验', timeout=15000)
+            await expect(page.locator('.chat-task-details')).to_contain_text('子流程结果不明，需核验')
+            await page.reload()
+            await expect(page.locator('[data-node="edit"] small')).to_have_text('子流程结果不明，需核验', timeout=15000)
+        finally:
+            await browser.close()
+
+
 async def test_chat_upload_dispatch_graph_restore_canvas_and_mobile(api, tmp_path):
     url, hub = api
     remote = FastAPI()

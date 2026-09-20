@@ -176,6 +176,8 @@ Uploaded files are durable artifact IDs. Model steps can set input.attachments={
 documents are extracted and images converted at the provider boundary; the selected model must support the input modality.
 For explicit text extraction use attachments.read with artifact_id, optionally foreach over $input.attachment_ids.
 Media APIs can consume a selected artifact ID from $input.attachment_ids. Do not embed file bytes, guess URLs or use filenames as perceived content.
+When available, attachments.prepare_image creates a bounded upload copy for large original images or HTTP 413 failures.
+Use its artifact.id for the edit call and original.id for the original/result association. Preserve the full original.
 Large audio/video need actual registered transcription/understanding APIs. Ask for missing services if unavailable.
 Use input nodes for missing business fields with a human-readable prompt and a JSON Schema titled in the user's language.
 Allowed kinds: tool, model, agent, transform, retrieve, artifact, input, approval, foreach, subworkflow.
