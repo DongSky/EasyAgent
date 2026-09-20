@@ -27,7 +27,7 @@ class Assistant(Contract):
     strategy: Literal["react", "plan_execute"] = "react"
     max_turns: int = Field(default=8, ge=1, le=64)
     max_tool_calls: int = Field(default=16, ge=0, le=128)
-    context_chars: int = Field(default=64000, ge=4000, le=500000)
+    context_chars: int | None = Field(default=None, ge=4000, le=500000)
     policy: str | None = None
     capability: Literal["chat", "image", "embedding"] = "chat"
     limits: RunLimits = Field(default_factory=RunLimits)
@@ -259,6 +259,9 @@ def install_studio(app, hub):
 
     @app.get("/v1/studio/connections")
     async def model_connections():
+        import asyncio
+        await asyncio.gather(*(b.provider.limits.discover(b.model) for b in list(hub.models.bindings.values())
+                               if isinstance(b.provider, HTTPProvider) and set(b.capabilities) & {'chat', 'decision'}))
         return hub.connections.model_catalog()
 
     @app.put("/v1/studio/model-default")

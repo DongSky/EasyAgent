@@ -218,7 +218,7 @@ multi-stage requests must expose their actual stages. Include a final useful res
             "name": "构建工作流 · " + assistant["name"][:140],
             "metadata": {"assistant_builder": identifier, "step_labels": {
                 "compile": "规划任务与能力", "verify": "查找接口、开发和验证节点"}},
-            "limits": {"model_calls": 8, "tool_calls": 8, "output_tokens": 65536},
+            "limits": {"model_calls": 24, "tool_calls": 8, "output_tokens": 65536},
             "steps": [
                 {
                     "id": "compile",

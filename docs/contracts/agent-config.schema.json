@@ -338,11 +338,18 @@
       "type": "array"
     },
     "context_chars": {
-      "default": 64000,
-      "maximum": 500000,
-      "minimum": 4000,
-      "title": "Context Chars",
-      "type": "integer"
+      "anyOf": [
+        {
+          "maximum": 500000,
+          "minimum": 4000,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Context Chars"
     },
     "forbidden_output": {
       "items": {

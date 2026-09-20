@@ -1,5 +1,9 @@
 export function stepStatus(run,step,statuses){
   if(step.status==='retrying')return '等待自动重试';
+  if(step.status==='running'){
+    const segments=Object.values(step.state?.build_requests||{}).map(r=>r.segments).find(s=>s&&!s.complete);
+    if(segments)return `正在分段构建 · 第 ${segments.turns} 轮`;
+  }
   if(step.status==='waiting_children'){
     const children=(run.children||[]).filter(child=>child.step_id===step.id);
     const blocking=[['needs_attention','子流程结果不明，需核验'],['waiting_approval','子流程等待确认执行'],['waiting_input','子流程等待补充信息'],['failed','子流程处理失败'],['waiting_remote','子流程等待外部任务结果']];

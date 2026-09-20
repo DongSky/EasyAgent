@@ -86,8 +86,12 @@
 @keyframes chatNodeBreathe{0%{opacity:.7;transform:scale(.985)}85%,100%{opacity:0;transform:scale(1.05,1.17)}}
 @keyframes chatNodeComplete{0%{box-shadow:0 0 0 0 #85b66a60}65%{box-shadow:0 0 0 7px #85b66a00}100%{box-shadow:0 3px 8px #30422705}}
 @keyframes chatCheckIn{0%{transform:scale(.6);opacity:.4}70%{transform:scale(1.16)}100%{transform:scale(1);opacity:1}}
+.chat-node.state-retrying{border-color:#d7b475;background:#fffcf4}
+.chat-node.state-retrying .chat-node-indicator{background:#fff0cc;color:#96742c;animation:chatPulse 1.8s ease-in-out infinite}
+.retry-request-status{display:flex;align-items:center;gap:8px;color:#6c8360;font-size:12px}
+.retry-request-spinner{display:inline-block;width:13px;height:13px;border:2px solid #c5dabb;border-top-color:#55833d;border-radius:50%;animation:chatSpin 1s linear infinite}
 @media(prefers-reduced-motion:reduce){
-  .chat-dag *,.chat-dag *::after,.chat-task-mark.is-working{animation:none!important;transition:none!important}
+  .chat-dag *,.chat-dag *::after,.chat-task-mark.is-working,.retry-request-spinner{animation:none!important;transition:none!important}
   .chat-dag .chat-edge.state-running .chat-edge-flow{stroke-dasharray:none;opacity:.8}
   .chat-node.state-running::after{opacity:.35;transform:none}
 }

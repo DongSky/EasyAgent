@@ -108,6 +108,8 @@ class HTTPProvider:
         self.dialect = dialect
         self.timeout = timeout
         self.max_bytes = max_bytes
+        from .model_limits import ModelLimits
+        self.limits = ModelLimits(self)
 
     async def post(self, path, payload):
         from .retry_policy import model_timeout, retry_after
@@ -134,6 +136,21 @@ class HTTPProvider:
         async with httpx.AsyncClient(timeout=httpx.Timeout(wait, connect=min(20, wait), pool=min(20, wait))) as client:
             async with client.stream("POST", self.base_url + path, json=payload, headers=headers) as response:
                 if response.status_code >= 400:
+                    if response.status_code in (400, 413):
+                        from .model_limits import context_error
+                        body = bytearray()
+                        async for chunk in response.aiter_bytes():
+                            body.extend(chunk)
+                            if len(body) > 64000:
+                                break
+                        if len(body) <= 64000:
+                            try:
+                                overflow = context_error(json.loads(body))
+                            except (ValueError, TypeError):
+                                overflow = None
+                            if overflow:
+                                self.limits.overflow(payload['model'], overflow.limit)
+                                raise overflow
                     # Provider responses may echo secrets or private content; do not persist the body.
                     raise ProviderError(response.status_code, parse_retry_after(response.headers.get('retry-after')))
                 if streaming:
@@ -154,6 +171,15 @@ class HTTPProvider:
         return mapping, {v: k for k, v in mapping.items()}
 
     async def generate(self, request, model):
+        if request.capability in ('chat', 'decision'):
+            limits = await self.limits.discover(model)
+            if cap := limits.get('max_output_tokens'):
+                request = request.model_copy(update={'max_output_tokens': min(request.max_output_tokens, cap)})
+        result = await self._generate(request, model)
+        self.limits.observe(model, request, result.usage)
+        return result
+
+    async def _generate(self, request, model):
         if request.capability not in ("chat", "decision", "image", "embedding"):
             raise ValueError("this HTTP adapter does not implement capability " + request.capability)
         if request.capability == "image":
@@ -255,6 +281,8 @@ class HTTPProvider:
             payload["tools"] = [{"name": reverse[t.name], "description": t.description, "input_schema": t.input_schema}
                                 for t in request.tools]
         data = await self.post("/messages", payload)
+        if data.get('stop_reason') == 'max_tokens':
+            raise ModelResponseError('max_output_tokens')
         return ModelResult(text="\n".join(c["text"] for c in data["content"] if c["type"] == "text"),
             tool_calls=[ToolCall(id=c["id"], name=forward.get(c["name"], c["name"]), arguments=c["input"])
                         for c in data["content"] if c["type"] == "tool_use"], usage=data.get("usage", {}))

@@ -51,6 +51,7 @@
           "type": "object"
         },
         "expected": {
+          "description": "Exact successful JSON output matching output_schema. Expected exceptions are not supported.",
           "title": "Expected"
         }
       },

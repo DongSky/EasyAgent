@@ -1,5 +1,5 @@
-import {stepStatus} from './run-status.js?v=20260920-retry-1';
-import {retryPanel,bindRetry} from './run-retry.js?v=20260920-retry-1';
+import {stepStatus} from './run-status.js?v=20260921-retry-context-2';
+import {retryPanel,bindRetry} from './run-retry.js?v=20260921-retry-context-2';
 import {modelChoices} from './model-choice.js';
 import {toolLabels} from './ui-labels.js';
 import {formatChat} from './chat-format.js';
@@ -125,7 +125,7 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
     const terminal=['succeeded','failed','cancelled'].includes(run.status);
     const byId=new Map(run.steps.map(s=>[s.id,s]));
     const statusOf=step=>terminal&&step.status==='running'?run.status:step.status;
-    const icons={running:'◌',succeeded:'✓',failed:'!',waiting_approval:'Ⅱ',waiting_input:'Ⅱ',needs_attention:'!',waiting_remote:'…',waiting_children:'…',cancelled:'−',skipped:'−'};
+    const icons={running:'◌',retrying:'↻',succeeded:'✓',failed:'!',waiting_approval:'Ⅱ',waiting_input:'Ⅱ',needs_attention:'!',waiting_remote:'…',waiting_children:'…',cancelled:'−',skipped:'−'};
     graph.querySelectorAll('[data-node]').forEach(button=>{
       const step=byId.get(button.dataset.node),status=statusOf(step),previous=button.dataset.status;
       const label=stepStatus(run,{...step,status},statuses);
@@ -164,15 +164,16 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
       const state=turn.task;if(!state)continue;const entry=ensureCard(turn),root=entry.root,find=s=>root.querySelector(s);
       find('[data-user]').textContent=turn.text;
       const attachments=state.attachments||[];find('[data-sent-files]').innerHTML=attachments.map(a=>`<button data-file="${escape(a.id)}">${glyph(a.kind)} ${escape(a.name)}</button>`).join('');find('[data-sent-files]').querySelectorAll('button').forEach(b=>b.onclick=guard(()=>downloadArtifact(attachments.find(a=>a.id===b.dataset.file))));
-      let run=null;if(state.run_id){run=runCache.get(state.run_id);if(!run||!['succeeded','failed','cancelled'].includes(run.status)){run=await api('/v1/runs/'+state.run_id);runCache.set(run.id,run);}if(c.id!==selected)return;entry.run=run;}
+      let run=null;if(state.run_id){run=runCache.get(state.run_id);if(!run||!['succeeded','failed','cancelled'].includes(run.status)||['starting','running'].includes(turn.status)){run=await api('/v1/runs/'+state.run_id);runCache.set(run.id,run);}if(c.id!==selected)return;entry.run=run;}
       const labels={queued:'已收到',routing:'正在匹配合适的流程',building:'正在创建新流程',executing:'正在执行',completed:'处理完成',waiting_connections:'已保存 · 等待连接模型或服务',superseded:'已合并到后续消息',clarification:'需要补充一点信息',answered:'回复',failed:'处理遇到问题',cancelled:'已停止'};
       const title=state.selected?.title||labels[state.phase]||'正在安排';
       const finished=run?.steps.filter(s=>['succeeded','skipped'].includes(s.status)).length||0;
-      const active=['queued','routing','building','executing'].includes(state.phase)&&(!run||run.steps.some(s=>s.status==='running'));
-      const label=run&&state.phase==='executing'?statuses[run.status]||run.status:labels[state.phase]||'正在安排';
-      const heading=`<div class="chat-task-heading"><span class="chat-task-mark ${active?'is-working':''}">${state.phase==='completed'?'✓':state.phase==='failed'?'!':'✦'}</span><div><b>${escape(title)}</b><p>${escape(label)}${state.selected?' · 固定版本 v'+state.selected.revision:''}</p></div>${run&&['executing','completed'].includes(state.phase)?`<span class="chat-step-count">${finished}/${run.steps.length}</span>`:''}</div>${state.reason?`<p class="chat-route-reason">${escape(state.reason)}</p>`:''}`;
+      const active=run?['queued','running'].includes(run.status):['queued','routing','building','executing'].includes(state.phase);
+      const retryWaiting=run?.steps.some(s=>s.status==='retrying')&&!run.steps.some(s=>s.status==='running');
+      const label=retryWaiting?'等待自动重试':active&&state.phase==='failed'?'正在继续处理':run&&state.phase==='executing'?statuses[run.status]||run.status:labels[state.phase]||'正在安排';
+      const heading=`<div class="chat-task-heading"><span class="chat-task-mark ${active?'is-working':''}">${active?'✦':state.phase==='completed'?'✓':state.phase==='failed'?'!':'✦'}</span><div><b>${escape(title)}</b><p>${escape(label)}${state.selected?' · 固定版本 v'+state.selected.revision:''}</p></div>${run&&['executing','completed'].includes(state.phase)?`<span class="chat-step-count">${finished}/${run.steps.length}</span>`:''}</div>${state.reason?`<p class="chat-route-reason">${escape(state.reason)}</p>`:''}`;
       if(heading!==entry.lastHeading){entry.lastHeading=heading;find('[data-card-heading]').innerHTML=heading;}
-      if(run&&['executing','completed','failed','cancelled'].includes(state.phase))updateGraph(entry,run);
+      if(run)updateGraph(entry,run);
       const message=c.messages.filter(m=>m.turn_id===turn.id&&m.role==='assistant').at(-1);find('[data-reply]').innerHTML=formatChat(message?.content||(['clarification','failed','waiting_connections','superseded'].includes(state.phase)?state.message:''),escape);
       find('[data-choices]').innerHTML=(state.choices||[]).map(choice=>`<button data-choice="${escape(choice.key)}">使用 ${escape(choice.title)} →</button>`).join('');find('[data-choices]').querySelectorAll('button').forEach(b=>b.onclick=guard(async()=>{await loadCatalog();$('[data-destination]').value=b.dataset.choice;if(!$('[data-destination]').value)throw Error('流程版本已更新，请在列表重新选择。');$('[data-text]').value=turn.text;files=[...attachments];drawFiles();await send();}));
       const setup=find('[data-setup]');
@@ -199,7 +200,20 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
   }
   async function downloadArtifact(a){const r=await fetch('/v1/artifacts/'+encodeURIComponent(a.id)+'/content',{headers:token()?{Authorization:'Bearer '+token()}:{}});if(!r.ok)throw Error('文件读取失败');download(await r.blob(),a.name);}
   async function refresh(){if(!selected||polling)return;polling=true;const id=selected;try{const c=await api('/v1/conversations/'+id);if(id!==selected)return;const next=JSON.stringify(c);if(next!==signature||c.active_run){signature=next;window.dispatchEvent(new CustomEvent('eah:conversation',{detail:{id:c.id}}));window.dispatchEvent(new CustomEvent('eah:message',{detail:{conversation:c.id,messages:c.messages}}));await paint(c);}}finally{polling=false;}}
-  window.addEventListener('eah:run-retried',e=>{runCache.delete(e.detail.id);for(const entry of cards.values()){entry.lastDetail='';entry.retryKey='';}signature='';refresh().catch(e=>flash(e.message));});
+  window.addEventListener('eah:run-retried',e=>{
+    const run=e.detail.run;
+    if(run)runCache.set(run.id,run);else runCache.delete(e.detail.id);
+    for(const entry of cards.values()){
+      entry.lastDetail='';entry.retryKey='';
+      if(run&&entry.run?.id===run.id){
+        entry.run=run;updateGraph(entry,run);entry.lastHeading='';
+        const mark=entry.root.querySelector('.chat-task-mark');mark.textContent='✦';mark.classList.toggle('is-working',['queued','running'].includes(run.status));
+        entry.root.querySelector('.chat-task-heading p').textContent='已提交重试，正在继续处理';
+        entry.root.querySelector('[data-retry]').replaceChildren();
+      }
+    }
+    signature='';refresh().catch(e=>flash(e.message));
+  });
   nav.onclick=guard(async()=>{showTab('conversations');await Promise.all([listing(),loadCatalog(),loadModels()]);if(!selected){const cached=localStorage.getItem('easyagent.workspaceConversation');if(historyRows.some(r=>r.id===cached))await choose(cached);}if(selected)await api('/v1/conversations/'+selected+'/resume-connections','POST',{});signature='';await refresh();});
   document.addEventListener('eah:route',e=>{floating.hidden=e.detail.id==='conversations';if(e.detail.id!=='conversations')for(const entry of cards.values())stopWatch(entry.details);});
   document.addEventListener('eah:chat-workflow',guard(async e=>{await nav.onclick();await choose(null);$('[data-destination]').value=e.detail.key;$('[data-destination]').dispatchEvent(new Event('change'));$('[data-text]').focus();}));

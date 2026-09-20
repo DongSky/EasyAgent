@@ -16,6 +16,10 @@ class ModelResponseError(RuntimeError):
         self.retryable = self.reason in ('server_error', 'rate_limit_exceeded')
         super().__init__('model response incomplete: ' + self.reason)
 
+    @property
+    def output_limited(self):
+        return self.reason in ('max_output_tokens', 'length')
+
 
 def retry_after(value):
     try:
@@ -46,10 +50,14 @@ def error_info(exc):
     status = getattr(exc, "status", None)
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
-    if isinstance(exc, ModelResponseError):
+    from .model_limits import ContextWindowError
+    if isinstance(exc, ContextWindowError):
+        category, retryable = 'context_limit', False
+        message = f'{subject}上下文已满，无法在保留原始要求的前提下继续压缩；已完成步骤已保存。'
+    elif isinstance(exc, ModelResponseError):
         retryable = exc.retryable
         category = 'output_limit' if exc.reason in ('max_output_tokens', 'length') else 'response_incomplete'
-        message = (f'{subject}输出达到上限，未生成完整结果。请简化任务或调整模型后重新生成流程。'
+        message = (f'{subject}单次输出达到上限，本次残缺结果未执行。已完成步骤已保留。'
                    if category == 'output_limit' else f'{subject}已响应，但未返回完整结果。'
                    + ('服务暂时异常，将按重试策略处理。' if retryable else '请检查模型服务或调整任务后重试。'))
     elif isinstance(exc, httpx.ReadTimeout):

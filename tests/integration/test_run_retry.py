@@ -357,3 +357,69 @@ async def test_builder_manual_retry_reuses_research_and_completed_plan(api, monk
         assert completed['steps'][0]['attempts'] == 1
         plan = (await client.get('/v1/studio/assistants/'+assistant['id']+'/workflow')).json()
         assert plan['status'] == 'ready', plan
+
+
+async def test_retried_build_graph_animates_without_replacing_nodes(api, monkeypatch):
+    from playwright.async_api import async_playwright, expect
+    from easyagent.contracts import ModelResult
+    from test_workspace_chat import settled
+    url, hub = api
+    ready = False
+    release, request_seen, allow_request = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    monkeypatch.setattr('easyagent.runtime.retry_delay', lambda info, attempt: .01)
+
+    class Planner:
+        async def generate(self, request, model):
+            if not ready:
+                raise httpx.ReadTimeout('fixture build timeout')
+            await release.wait()
+            return ModelResult(data={'workflow': None, 'questions': ['还需要任务材料'], 'explanation': '请补充材料'})
+
+    hub.models.register('planner', Planner(), 'fixture', ['decision'])
+    c = await hub.conversations.create({'workspace': True, 'model': 'planner'})
+    await hub.conversations.send(c['id'], {'text': '创建测试流程', 'intent': 'create'})
+    c = await settled(hub, c['id'])
+    turn = c['turns'][-1]
+    assert turn['task']['failed_phase'] == 'building'
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch()
+        try:
+            page = await browser.new_page(reduced_motion='no-preference')
+            await page.add_init_script('localStorage.setItem("easyagent.workspaceConversation", '+json.dumps(c['id'])+')')
+            await page.goto(url+'/#conversations')
+            card = page.locator('[data-turn="'+turn['id']+'"]')
+            node = card.locator('[data-node="compile"]')
+            await expect(node).to_have_attribute('data-status', 'failed')
+            await node.evaluate('(el)=>window.retryNode=el')
+
+            async def delay_retry(route):
+                request_seen.set()
+                await allow_request.wait()
+                await route.continue_()
+
+            await page.route('**/v1/runs/*/retry', delay_retry)
+            ready = True
+            await card.locator('[data-retry]').get_by_role('button', name='延长等待重试').click()
+            await asyncio.wait_for(request_seen.wait(), 5)
+            await expect(card.locator('[aria-busy="true"]')).to_have_text('正在提交重试…')
+            await expect(card.locator('.retry-request-spinner')).to_have_css('animation-name', 'chatSpin')
+            allow_request.set()
+            await expect(node).to_have_attribute('data-status', 'running')
+            await expect(node.locator('.chat-node-indicator')).to_have_css('animation-name', 'chatSpin')
+            await expect(card.locator('.chat-task-mark')).to_have_class('chat-task-mark is-working')
+            await expect(card.locator('.state-failed')).to_have_count(0)
+            await page.wait_for_function('window.retryNode.getAnimations({subtree:true}).some(a=>a.currentTime>1000)')
+            assert await node.evaluate('(el)=>el===window.retryNode')
+            await page.emulate_media(reduced_motion='reduce')
+            await expect(node.locator('.chat-node-indicator')).to_have_css('animation-name', 'none')
+            await page.emulate_media(reduced_motion='no-preference')
+            await page.reload()
+            await expect(node).to_have_attribute('data-status', 'running')
+            await expect(node.locator('.chat-node-indicator')).to_have_css('animation-name', 'chatSpin')
+            release.set()
+            await expect(node).to_have_attribute('data-status', 'succeeded', timeout=10000)
+            await expect(card.locator('.chat-task-mark.is-working')).to_have_count(0)
+        finally:
+            allow_request.set()
+            release.set()
+            await browser.close()

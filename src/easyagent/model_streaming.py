@@ -46,7 +46,8 @@ async def fold_sse(response, dialect, max_bytes):
             elif kind == "message_delta":
                 usage.update(obj.get("usage", {}))
                 if obj.get("delta", {}).get("stop_reason") == "max_tokens":
-                    raise ValueError("provider output truncated")
+                    from .retry_policy import ModelResponseError
+                    raise ModelResponseError('max_output_tokens')
             elif kind == "message_stop":
                 complete = True
             elif kind == "error":

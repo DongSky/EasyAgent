@@ -120,6 +120,8 @@ class Connections:
             except KeyError:
                 config = None
             result.append({**item, 'managed': config is not None,
+                           'limits': (self.hub.models.bindings[item['alias']].provider.limits.public(item['model'])
+                                      if hasattr(self.hub.models.bindings[item['alias']].provider, 'limits') else {'source': 'unknown'}),
                            **({k: config[k] for k in ('base_url', 'dialect')} if config else {}),
                            'has_key': bool(config and config.get('credential'))})
         return {'connections': result, 'default_model': self.default_model()}

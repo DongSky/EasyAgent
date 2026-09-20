@@ -111,16 +111,40 @@ class BuildCapabilities:
 
     async def ask(self, ctx, model, schema, instruction, content, tokens=8192, check=None,
                   *, attempts=2, repair_state=None):
-        messages = (repair_state or {}).get('messages') or [
+        from .build_recovery import assemble
+        from .retry_policy import ModelResponseError
+        root = repair_state if repair_state is not None else ctx.job['state']
+        key = hashlib.sha256(encode([model, schema, instruction, content, tokens]).encode()).hexdigest()
+        progress = root.setdefault('build_requests', {}).setdefault(key, {})
+
+        def save():
+            self.hub.store.checkpoint(ctx.job, root)
+
+        if 'result' in progress:
+            return progress['result']
+        if 'segments' in progress:
+            return await assemble(self, ctx, model, schema, instruction, content, progress, save, check, tokens)
+        messages = progress.get('messages') or (repair_state or {}).get('messages') or [
             {'role': 'system', 'content': instruction}, {'role': 'user', 'content': encode(content)}]
-        for attempt in range((repair_state or {}).get('attempt', 0), attempts):
+        for attempt in range(progress.get('attempt', (repair_state or {}).get('attempt', 0)), attempts):
             result = None
             try:
                 result = await self.hub.generate(ctx.job, ModelRequest(model=model, capability='decision',
                     max_output_tokens=tokens, response_schema=schema, messages=messages))
                 if check:
                     check(result.data)
+                progress['result'] = result.data
+                save()
                 return result.data
+            except ModelResponseError as exc:
+                if not exc.output_limited:
+                    raise
+                progress['segments'] = {'draft': {}, 'turns': 0}
+                save()
+                with self.hub.store.transaction() as db:
+                    self.hub.store.event(db, ctx.run_id, 'build.output_recovery', {
+                        'step': ctx.step_id, 'strategy': 'incremental', 'max_turns': 12})
+                return await assemble(self, ctx, model, schema, instruction, content, progress, save, check, tokens)
             except (ValidationError, ContractError, json.JSONDecodeError) as exc:
                 if isinstance(exc, ValidationError):
                     detail = ('path=' + '.'.join(map(str, exc.absolute_path)) + '; constraint='
@@ -137,8 +161,8 @@ class BuildCapabilities:
                 messages.append({'role': 'user', 'content':
                     'Your previous response failed validation. Return a complete corrected object preserving the original '
                     'task, dependencies and completed writes. Follow the required JSON schema; do not enlarge limits. ' + detail})
-                if repair_state is not None:
-                    self.checkpoint(ctx, repair_state, messages=messages, attempt=attempt + 1, last_error=detail)
+                progress.update(messages=messages, attempt=attempt + 1, last_error=detail)
+                save()
                 with self.hub.store.transaction() as db:
                     self.hub.store.event(db, ctx.run_id, 'build.validation_failed',
                                          {'step': ctx.step_id, 'attempt': attempt + 1, 'constraint': detail})
@@ -164,6 +188,7 @@ class BuildCapabilities:
         if not ctx.job.get('spec') or self.hub.store.run(ctx.run_id)['spec']['metadata'].get('assistant_builder') != args['assistant_id']:
             raise PermissionError('verification belongs to a task build')
         state = ctx.job['state'] or {'draft': args['draft'], 'attempt': 0, 'development': []}
+        self.checkpoint(ctx, state)
         draft = BuildDraft.model_validate(state['draft'])
         namespace = code_namespace(args['assistant_id'], args['assistant'])
         build = stored(self.hub, 'studio-assistant-builds', args['assistant_id'])

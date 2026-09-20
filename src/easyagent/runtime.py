@@ -589,8 +589,10 @@ class Hub:
             "pending_index": 0,
         }
         if not state.get("context_loaded"):
+            history = None
             if history := self.conversations.context(job):
                 state["messages"] = [{"role": "system", "content": config.instructions}, *history]
+                state['context_pins'] = [encode(history[0]), encode(history[-1])]
             await self.extensions.dispatch("agent.start", {"model": model}, job=job)
             sources = []
             for namespace in config.knowledge:
@@ -617,7 +619,7 @@ class Hub:
                     },
                 )
             state["context_loaded"] = True
-            state["prefix_count"] = len(state["messages"])
+            state["prefix_count"] = (1 + bool(sources or memories)) if history else len(state["messages"])
             self.store.checkpoint(job, state)
         if config.strategy == "plan_execute":
             return await self.plan_execute(job, model, config, state, force_approval)
@@ -660,20 +662,23 @@ class Hub:
                 self.store.checkpoint(job, state)
             if state["turns"] >= config.max_turns:
                 raise ValueError("agent model-call budget exhausted")
-            await self.compact_context(job, state, config.context_chars)
+            await self.compact_for_model(job, state, config, model)
             state["turns"] += 1
             self.store.checkpoint(job, state)
-            result = await self.generate(
-                job,
-                ModelRequest(
+            request = ModelRequest(
                     model=model,
                     messages=state["messages"],
                     tools=[self.tools.spec(name, config.tool_revisions.get(name)) for name in config.tools],
                     response_schema=config.response_schema,
                     max_output_tokens=config.max_output_tokens,
                     capability="decision" if config.response_schema else "chat",
-                ),
-            )
+                )
+            try:
+                result = await self.generate(job, request)
+            except Exception as exc:
+                if await self.recover_model_turn(job, state, config, model, exc):
+                    continue
+                raise
             if not result.tool_calls:
                 if any(term.casefold() in result.text.casefold() for term in config.forbidden_output):
                     raise PermissionError("output guard rejected a configured forbidden phrase")
@@ -690,6 +695,56 @@ class Hub:
             state["pending"], state["pending_index"] = json.loads(encode(calls)), 0
             self.store.checkpoint(job, state)
 
+    async def compact_for_model(self, job, state, config, model, *, overflow=False):
+        from .models import HTTPProvider
+        binding = self.extensions.provider_binding(model, self.extensions.run_snapshot(job)) or self.models.bindings.get(model)
+        limits = await binding.provider.limits.discover(binding.model) if binding and isinstance(binding.provider, HTTPProvider) else {}
+        chars = config.context_chars  # Optional legacy caller cap; there is no fixed default model window.
+        output = min(config.max_output_tokens, limits.get('max_output_tokens', config.max_output_tokens))
+        available = limits.get('max_input_tokens')
+        if window := limits.get('context_window'):
+            available = min(available or window, window - output)
+        if available is not None:
+            ratio = limits.get('tokens_per_byte', 1)
+            overhead = len(encode({'tools': [self.tools.spec(n, config.tool_revisions.get(n)).model_dump()
+                                            for n in config.tools], 'schema': config.response_schema}).encode())
+            # Convert service tokens to a conservative character bound, accounting for CJK and tool schemas.
+            wire = encode(state['messages'])
+            bytes_per_char = len(wire.encode()) / max(1, len(wire))
+            detected = max(1, int((available * .8 / ratio - overhead) / bytes_per_char))
+            chars = min(chars, detected) if chars else detected
+        if overflow:
+            reduced = max(1, int(len(encode(state['messages'])) * .65))
+            chars = min(chars, reduced) if chars else reduced
+        if chars is not None:
+            await self.compact_context(job, state, chars)
+
+    async def recover_model_turn(self, job, state, config, model, exc):
+        from .model_limits import ContextWindowError
+        from .retry_policy import ModelResponseError
+        if isinstance(exc, ContextWindowError):
+            before = encode(state['messages'])
+            await self.compact_for_model(job, state, config, model, overflow=True)
+            if encode(state['messages']) == before:
+                return False
+            kind = 'context_overflow'
+        elif isinstance(exc, ModelResponseError) and exc.output_limited:
+            count = state.get('output_recoveries', 0)
+            if count >= 2:
+                return False
+            state['output_recoveries'] = count + 1
+            state['messages'].append({'role': 'user', 'content':
+                'The previous response hit the output limit. None of its tool calls were executed. '
+                'Continue from saved tool results. Issue one small complete tool call at a time, '
+                'split large writes into smaller parts, and keep prose concise. Never repeat completed writes.'})
+            kind = 'output_limit'
+        else:
+            return False
+        self.store.checkpoint(job, state)
+        with self.store.transaction() as db:
+            self.store.event(db, job['run_id'], 'agent.recovering', {'step': job['id'], 'reason': kind})
+        return True
+
     async def compact_context(self, job, state, limit):
         messages = state["messages"]
         if len(encode(messages)) <= limit:
@@ -699,7 +754,8 @@ class Hub:
             tail_start = max(prefix, len(messages) - 4)
             while tail_start > prefix and messages[tail_start].get("role") == "tool":
                 tail_start -= 1
-            if tail_start > prefix:
+            if tail_start > prefix and not any(encode(m) in state.get('context_pins', [])
+                                               for m in messages[prefix:tail_start]):
                 compressed = await self.backends.call(
                     "context",
                     "compact",
@@ -720,13 +776,16 @@ class Hub:
         # Preserve original instructions and user request. Remove complete historical
         # assistant/tool groups, never orphan provider tool call ids.
         original = len(messages)
-        while len(encode(messages)) > limit and len(messages) > state.get("prefix_count", 2) + 1:
-            start = state.get("prefix_count", 2)
+        start = state.get("prefix_count", 2)
+        while len(encode(messages)) > limit and start < len(messages) - 1:
             end = start + 1
             while end < len(messages) and messages[end]["role"] == "tool":
                 end += 1
             if end == len(messages):
                 break
+            if any(encode(m) in state.get('context_pins', []) for m in messages[start:end]):
+                start = end
+                continue
             del messages[start:end]
         if len(encode(messages)) > limit:
             raise ValueError("context budget exhausted; reduce document or tool output size")
@@ -756,6 +815,11 @@ class Hub:
             ) or self.models.bindings.get(alias)
             if not binding:
                 raise ValueError("unregistered model: " + alias)
+            from .models import HTTPProvider
+            if isinstance(binding.provider, HTTPProvider) and request.capability in ('chat', 'decision'):
+                limits = await binding.provider.limits.discover(binding.model)
+                if cap := limits.get('max_output_tokens'):
+                    request = request.model_copy(update={'max_output_tokens': min(request.max_output_tokens, cap)})
             call_id = uuid.uuid4().hex
             estimated_input = len(encode(request.model_dump()).encode())
             price_known = isinstance(binding.provider, MockProvider) or (
@@ -1001,7 +1065,7 @@ class Hub:
             if state["turns"] >= config.max_turns:
                 raise ValueError("planner model budget exhausted")
             state["turns"] += 1
-            await self.compact_context(job, state, config.context_chars)
+            await self.compact_for_model(job, state, config, model)
             self.store.checkpoint(job, state)
             instruction = {
                 "role": "system",
@@ -1011,16 +1075,19 @@ class Hub:
                 )
                 + ". After observations, revise the plan or finish. Return done=true only when the result is verified.",
             }
-            result = await self.generate(
-                job,
-                ModelRequest(
+            request = ModelRequest(
                     model=model,
                     capability="decision",
                     messages=[instruction, *state["messages"]],
                     response_schema=schema,
                     max_output_tokens=config.max_output_tokens,
-                ),
-            )
+                )
+            try:
+                result = await self.generate(job, request)
+            except Exception as exc:
+                if await self.recover_model_turn(job, state, config, model, exc):
+                    continue
+                raise
             decision = result.data
             if decision["done"]:
                 if any(term.casefold() in decision["answer"].casefold() for term in config.forbidden_output):

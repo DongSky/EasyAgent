@@ -7,13 +7,24 @@ export function retryPanel(run,escape){
 
 export function bindRetry(root,run,{api,onRetry}){
   root.querySelectorAll('[data-retry-run]').forEach(button=>button.onclick=async()=>{
+    if(button.disabled)return;
     const buttons=[...root.querySelectorAll('[data-retry-run]')];buttons.forEach(b=>b.disabled=true);
+    const label=button.textContent;
+    button.textContent='正在提交重试…';button.setAttribute('aria-busy','true');
+    const progress=document.createElement('p');progress.className='retry-request-status';progress.setAttribute('role','status');
+    progress.innerHTML='<span class="retry-request-spinner" aria-hidden="true"></span>正在提交重试请求…';
+    button.closest('.run-retry').append(progress);
     const error=root.querySelector('[data-retry-error]');if(error)error.hidden=true;
+    let accepted=false;
     try{
-      await api('/v1/runs/'+run.id+'/retry','POST',{expected_updated:run.updated,longer_wait:button.dataset.retryRun==='longer'});
-      window.dispatchEvent(new CustomEvent('eah:run-retried',{detail:{id:run.id}}));
+      const resumed=await api('/v1/runs/'+run.id+'/retry','POST',{expected_updated:run.updated,longer_wait:button.dataset.retryRun==='longer'});
+      accepted=true;button.textContent='已提交重试';progress.textContent='重试已提交，正在更新进度…';
+      window.dispatchEvent(new CustomEvent('eah:run-retried',{detail:{id:run.id,run:resumed}}));
       await onRetry();
-    }catch(e){if(error){error.textContent=e.message;error.hidden=false;}buttons.forEach(b=>b.disabled=false);}
+    }catch(e){
+      if(error){error.textContent=accepted?'重试已提交，但进度刷新失败，请刷新页面查看。':e.message;error.hidden=false;}
+      if(!accepted){buttons.forEach(b=>b.disabled=false);button.textContent=label;}
+    }finally{button.removeAttribute('aria-busy');progress.remove();}
   });
 }
 

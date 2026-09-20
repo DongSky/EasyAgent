@@ -34,8 +34,15 @@
 
 ## 实现与验证
 
+模型单次输出截断时，构建器会切换到分段草稿：每轮提交少量完整的字段、步骤或代码片段，持久保存后再生成下一段。截断的段不会应用，网络失败后继续使用已保存的草稿。整个对象通过 schema、流程和代码测试后才发布，分叉与多个输入不变。每个构建请求最多 12 段，新构建任务最多 24 次模型调用，总输出预算仍为 65,536 tokens；恢复不会清空已用预算。普通工具 Agent 也会把输出截断反馈给模型，最多两次要求缩小调用，残缺参数绝不执行。
+
+Agent 上下文默认自动识别，不再固定为 64,000 字符。系统读取当前服务 `/models/{id}` 或 `/models` 中的上下文、输入及输出上限；缓存与具体连接、模型绑定，切换模型重新读取。服务没有返回上限时界面标为未知，不根据模型名称猜测，也不发送付费的长提示探测。实际输入 usage 用于校准长度估计；服务明确报上下文超限时记录可确认的上限，并压缩历史后继续。压缩保留原始要求与完整工具调用/结果组，无法在保留必要材料的条件下容纳请求时停止并保留进度。`context_chars` 仅保留为 SDK 调用方可选的额外约束，默认 `null`，不是模型窗口。
+
+2026-09-21 核对 [Pi agent loop](https://github.com/earendil-works/pi/blob/3390bd93630965a12a0a1a5c36ce890ec22f7e1d/packages/agent/src/agent-loop.ts) 与 [session recovery](https://github.com/earendil-works/pi/blob/3390bd93630965a12a0a1a5c36ce890ec22f7e1d/packages/coding-agent/src/core/agent-session.ts)：它会把工具结果回送下一轮，拒绝执行因 `length` 截断的工具调用，并区分瞬时错误重试和上下文压缩恢复。并非任意截断都自动无损续写。这里按本项目的持久化流程实现同类恢复原则；分段草稿是 EasyAgent 的实现，未复制 Pi 源码，也不声称两者功能等价。
+
 - `assistant_builder.py`：向模型提供现有能力、编译扩展草案和可见工作流。
 - `build_capabilities.py`：绑定已有媒体接口、独立测试、修正代码、创建节点及 Skill。
+- `build_recovery.py`、`model_limits.py`：分段草稿恢复、服务窗口识别与运行中校准。
 - `capability_research.py`：有界搜索与公开文档读取；外部内容只作为不可信参考。
 - `workspace_chat.py`：把构建、执行、失败修正和继续执行连接到对话入口。
 - `tests/integration/test_autonomous_build.py`：真实 HTTP 和隔离 JavaScript 执行的协议测试，包含修图文件传递、错误实现被测试捕获、重启复用、搜索适配和避免重复写入。测试使用明确的模型夹具，不把它们称为真实模型效果测试。

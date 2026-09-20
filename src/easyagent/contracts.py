@@ -226,7 +226,7 @@ class AgentConfig(Contract):
     strategy: Literal["react", "plan_execute"] = "react"
     knowledge: list[str] = Field(default_factory=list)
     memory_namespaces: list[str] = Field(default_factory=list)
-    context_chars: int = Field(default=64000, ge=4000, le=500000)
+    context_chars: int | None = Field(default=None, ge=4000, le=500000)
     forbidden_output: list[str] = Field(default_factory=list)
     streaming: bool = False
     code_development: CodeDevelopmentGrant | None = None
