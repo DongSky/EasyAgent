@@ -132,12 +132,24 @@ async def test_deleted_media_adapters_revoke_old_versions_even_after_recreation(
 
 
 async def test_browser_manage_models_and_select_chat_and_builder(api):
+    import asyncio
+
     url, hub = api
     remote, calls = model_server()
     async with live_server(remote) as endpoint, async_playwright() as playwright:
         browser = await playwright.chromium.launch()
         page = await browser.new_page(viewport={'width': 1440, 'height': 1000})
         errors = []
+        refresh_entered, release_refresh = asyncio.Event(), asyncio.Event()
+        delay_refresh = False
+
+        async def hold_refresh(route):
+            if delay_refresh:
+                refresh_entered.set()
+                await release_refresh.wait()
+            await route.continue_()
+
+        await page.route('**/v1/tools', hold_refresh)
         page.on('pageerror', lambda error: errors.append(str(error)))
         try:
             await page.goto(url+'/#connections')
@@ -149,13 +161,16 @@ async def test_browser_manage_models_and_select_chat_and_builder(api):
             await page.locator('#discoverConnectionModels').click()
             await expect(page.locator('#connectionModels option')).to_have_count(2)
             await form.locator('[name=model]').fill('alpha')
+            delay_refresh = True
             await page.locator('#saveConnection').click()
             await expect(page.locator('#connectionDialog')).not_to_be_visible()
+            await asyncio.wait_for(refresh_entered.wait(), 5)
             row = page.locator('[data-model-row=first]')
             await expect(row).to_contain_text('alpha')
             await row.locator('[data-edit-model]').click()
             await expect(form.locator('[name=api_key]')).to_have_value('')
             await expect(form.locator('[name=alias]')).to_have_attribute('readonly', '')
+            release_refresh.set()
             await form.locator('[name=model]').fill('beta')
             await page.locator('#saveConnectionOnly').click()
             await expect(row).to_contain_text('beta')
@@ -208,6 +223,7 @@ async def test_browser_manage_models_and_select_chat_and_builder(api):
             await expect(row).to_have_count(0)
             assert not errors
         finally:
+            release_refresh.set()
             await browser.close()
 
 

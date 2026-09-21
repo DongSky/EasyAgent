@@ -5,7 +5,9 @@ concurrency:
   cancel-in-progress: true
 jobs:
   integration:
-    timeout-minutes: 20
+    # Windows setup alone takes about five minutes; leave room for the full suite.
+    # The per-test 120-second watchdog still catches stalled tests and fixtures.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 40 || 20 }}
     strategy:
       fail-fast: false
       matrix:
@@ -27,7 +29,7 @@ jobs:
       - run: uv run --extra app --extra dev ruff check src sdk/python/src apps tests examples
       - run: cargo build --locked --manifest-path sdk/rust/Cargo.toml --examples
       - id: tests
-        run: uv run --extra app --extra dev pytest -q --tb=short tests/integration --junitxml=.eah/ci/junit.xml
+        run: uv run --extra app --extra dev pytest -v --tb=short --durations=20 tests/integration --junitxml=.eah/ci/junit.xml
       - name: Report test failures
         if: failure() && steps.tests.outcome == 'failure'
         shell: python

@@ -83,17 +83,24 @@ export function modelConnection({ api, $, load, flash }) {
         ? '/v1/studio/connections/' + encodeURIComponent(editing) + (test ? '?test=true' : '')
         : '/v1/studio/connections' + (test ? '/test-and-save' : '');
       await api(path, editing ? 'PUT' : 'POST', data);
-      form.elements.api_key.value = '';
-      close();
-      flash(test ? '模型连接已保存，测试通过' : '模型连接已保存');
-      window.dispatchEvent(new Event('eah:connections-changed'));
-      await load();
     } catch (error) {
       $('connectionResult').textContent = '未完成：' + error.message;
       if (!dialog.open) flash(error.message);
+      return;
     } finally {
       lock(false);
       if (!dialog.open) form.elements.api_key.value = '';
+    }
+    form.elements.api_key.value = '';
+    close();
+    flash(test ? '模型连接已保存，测试通过' : '模型连接已保存');
+    // Refreshing other panels must not keep a completed save locked or later
+    // clear fields in a newly opened editor.
+    window.dispatchEvent(new Event('eah:connections-changed'));
+    try {
+      await load();
+    } catch (error) {
+      flash('连接已保存，刷新失败：' + error.message);
     }
   };
 }

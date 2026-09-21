@@ -70,9 +70,16 @@ async def test_default_model_wait_has_no_read_deadline_and_can_be_cancelled(hub,
         release.set()
 
 
-async def test_continuous_wait_retry_removes_explicit_read_and_step_timeouts(hub):
+@pytest.mark.parametrize('before_send', [False, True])
+async def test_continuous_wait_retry_removes_explicit_read_and_step_timeouts(hub, before_send):
     remote = FastAPI()
-    calls = []
+    calls, waits = [], []
+    release_discovery = asyncio.Event()
+
+    class Provider(HTTPProvider):
+        async def _post(self, path, payload, wait, parser):
+            waits.append(wait)
+            return await super()._post(path, payload, wait, parser)
 
     @remote.post('/chat/completions')
     async def reply():
@@ -81,16 +88,34 @@ async def test_continuous_wait_retry_removes_explicit_read_and_step_timeouts(hub
         return {'choices': [{'message': {'content': 'completed'}}]}
 
     async with live_server(remote) as endpoint:
-        hub.models.register('planner', HTTPProvider(endpoint, timeout=.02), 'fixture', ['chat'])
+        provider = Provider(endpoint, timeout=.02)
+        if before_send:
+            discover = provider.limits.discover
+
+            async def delayed_discovery(model):
+                await release_discovery.wait()
+                return await discover(model)
+
+            provider.limits.discover = delayed_discovery
+        hub.models.register('planner', provider, 'fixture', ['chat'])
         failed = await hub.wait(hub.submit({'name': 'explicit timeout', 'steps': [
-            {'id': 'wait', 'kind': 'model', 'target': 'planner', 'max_attempts': 1, 'timeout_seconds': .08,
+            {'id': 'wait', 'kind': 'model', 'target': 'planner', 'max_attempts': 1,
+             'timeout_seconds': .08 if before_send else 5,
              'input': {'prompt': 'test'}}]}))
         assert failed['status'] == 'failed' and failed['retry']['longer_wait']
+        if before_send:
+            assert not calls
+        release_discovery.set()
         await retry_run(hub, failed['id'], RetryRequest(expected_updated=failed['updated'], longer_wait=True))
         result = await hub.wait(failed['id'])
         assert result['status'] == 'succeeded', result
         assert result['steps'][0]['output']['text'] == 'completed'
-        assert len(calls) == 2
+        # A short step deadline can expire during discovery/client setup, before
+        # the first HTTP request reaches the server. Verify the durable attempts
+        # and effective deadlines instead of assuming two remote requests.
+        assert result['steps'][0]['attempts'] == 2
+        assert result['steps'][0]['retry_state']['step_timeout'] is None
+        assert waits[-1] is None and calls
 
 
 async def test_http_model_timeout_adapts_and_diagnostics_are_safe(hub, monkeypatch):

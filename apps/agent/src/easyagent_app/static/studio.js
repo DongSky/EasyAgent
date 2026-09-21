@@ -78,7 +78,7 @@ $('authBtn').onclick = guard(async () => {
     flash('凭证已更新');
   }
 });
-import { modelConnection } from './model-connection.js?v=20260920-pending-1';
+import { modelConnection } from './model-connection.js?v=20260921-save-unlock-1';
 modelConnection({ api, $, load, flash });
 async function loadBase() {
   const selectedTool = $('newTool').value;
