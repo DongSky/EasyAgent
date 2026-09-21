@@ -106,6 +106,13 @@ def _prefix_end(messages, pinned):
     return end
 
 
+# One correction round: enough to fix a formatting slip, bounded so a noncompliant model
+# cannot loop. Taken from Hermes' delegate contract ("exactly one bounded correction round").
+SCHEMA_CORRECTION_ROUNDS = 1
+
+# Escalating backoff for a summariser that keeps failing (60s, then 300s, then 900s).
+COMPACTION_COOLDOWN_SECONDS = (60, 300, 900)
+
 COMPACTION_INSTRUCTIONS = """Write a handoff summary for the agent that continues this task from the same
 saved state. Keep every user instruction and constraint verbatim in meaning; they are the intent
 everything else derives from and cannot be reconstructed from the work that followed. Summarise
@@ -773,6 +780,11 @@ class Hub:
             try:
                 result = await self.generate(job, request)
             except Exception as exc:
+                correction = await self.correct_schema_violation(job, state, config, model, exc)
+                if correction == "retry":
+                    continue
+                if correction is not None:
+                    return correction
                 if await self.recover_model_turn(job, state, config, model, exc):
                     continue
                 raise
@@ -853,6 +865,39 @@ class Hub:
         if chars is not None:
             await self.compact_context(job, state, chars)
 
+    async def correct_schema_violation(self, job, state, config, model, exc):
+        """Give a schema-bound agent one bounded correction round; never discard its work.
+
+        Returns "retry" to re-prompt, or a finished step result when the contract still does
+        not match after the allowance is spent: the answer is returned unvalidated with the
+        validation errors attached, so a caller loses nothing but learns it is unverified.
+        """
+        response = getattr(exc, "model_response", None)
+        if not config.response_schema or response is None:
+            return None
+        detail = str(exc)[:600]
+        used = state.get("schema_corrections", 0)
+        if used < SCHEMA_CORRECTION_ROUNDS:
+            state["schema_corrections"] = used + 1
+            # The model must be able to see what it just produced, or "correct the format"
+            # would mean starting over and could lose findings it had already established.
+            state["messages"].append({"role": "assistant", "content": response.text})
+            state["messages"].append({"role": "user", "content":
+                "Your answer did not satisfy the required result format. Correct only the format: keep every "
+                "finding and identifier you already established, and return exactly one JSON value, without "
+                "prose or code fences. The validation error was: " + detail})
+            self.store.checkpoint(job, state)
+            with self.store.transaction() as db:
+                self.store.event(db, job["run_id"], "agent.schema_correction",
+                                 {"step": job["id"], "round": used + 1, "constraint": detail})
+            return "retry"
+        with self.store.transaction() as db:
+            self.store.event(db, job["run_id"], "agent.schema_unmet",
+                             {"step": job["id"], "constraint": detail})
+        return {**response.model_dump(), "turns": state["turns"], "tool_count": state["tool_count"],
+                "schema_valid": False, "schema_errors": [detail],
+                "schema_note": "the child's answer did not match the requested result format; text is unverified"}
+
     async def recover_model_turn(self, job, state, config, model, exc):
         from .model_limits import ContextWindowError
         from .retry_policy import ModelResponseError
@@ -887,7 +932,11 @@ class Hub:
             tail_start = max(prefix, len(messages) - 4)
             while tail_start > prefix and messages[tail_start].get("role") == "tool":
                 tail_start -= 1
-            if tail_start > prefix and _free(messages, prefix, tail_start, pinned):
+            cooldown = state.get("compaction_cooldown") or {}
+            # A summariser that just failed is not worth retrying this turn: repeating a broken
+            # call every turn pays its cost forever. Back off further each time it fails again.
+            if tail_start > prefix and _free(messages, prefix, tail_start, pinned) \
+                    and time.time() >= cooldown.get("until", 0):
                 # Fail open: a broken summariser must never be worse than not installing one, so
                 # a failure or an unusable result falls through to plain deletion below.
                 try:
@@ -902,11 +951,17 @@ class Hub:
                         job,
                     )
                     summary = compressed["summary"].strip() if isinstance(compressed, dict) else ""
+                    state.pop("compaction_cooldown", None)
                 except (ValueError, KeyError, PermissionError, asyncio.TimeoutError, RuntimeError) as exc:
                     summary = ""
+                    strikes = cooldown.get("strikes", 0) + 1
+                    delay = COMPACTION_COOLDOWN_SECONDS[min(strikes - 1, len(COMPACTION_COOLDOWN_SECONDS) - 1)]
+                    state["compaction_cooldown"] = {"until": time.time() + delay, "strikes": strikes}
+                    self.store.checkpoint(job, state)
                     with self.store.connect() as db:
                         self.store.event(db, job["run_id"], "context.compaction_failed",
-                                         {"step": job["id"], "error": type(exc).__name__})
+                                         {"step": job["id"], "error": type(exc).__name__,
+                                          "retry_after_seconds": delay, "attempt": strikes})
                 if summary:
                     state["messages"] = (
                         messages[:prefix]
@@ -1234,6 +1289,11 @@ class Hub:
             try:
                 result = await self.generate(job, request)
             except Exception as exc:
+                correction = await self.correct_schema_violation(job, state, config, model, exc)
+                if correction == "retry":
+                    continue
+                if correction is not None:
+                    return correction
                 if await self.recover_model_turn(job, state, config, model, exc):
                     continue
                 raise

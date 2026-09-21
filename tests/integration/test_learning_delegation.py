@@ -164,3 +164,85 @@ async def test_subagent_result_is_bounded_and_carries_a_hash(hub):
     assert payload["status"] == "succeeded"
     assert payload["truncated"] and payload["hashed"]
     assert payload["length"] < 40000
+
+
+async def test_subagent_result_schema_corrects_once_then_keeps_unverified_work(hub):
+    """A result contract gets one bounded correction round; the work is never thrown away."""
+    schema = {"type": "object", "properties": {"total": {"type": "integer"}}, "required": ["total"],
+              "additionalProperties": False}
+
+    class Child:
+        def __init__(self, obey):
+            self.obey, self.attempts = obey, 0
+
+        async def generate(self, request, model):
+            if model == "child":
+                self.attempts += 1
+                if self.obey and self.attempts > 1:
+                    return ModelResult(text='{"total": 5}', usage={"mock": True})
+                return ModelResult(text="Alice totals five, Bob four; see the table above.", usage={"mock": True})
+            observations = [json.loads(m["content"]) for m in request.messages if m["role"] == "tool"]
+            if observations and isinstance(observations[-1].get("error"), dict):
+                return ModelResult(text="refused", usage={"mock": True})
+            if not observations:
+                return ModelResult(
+                    tool_calls=[ToolCall(id="spawn", name="agents.spawn",
+                                         arguments={"goal": "count", "model": "child", "tools": [],
+                                                    "response_schema": schema})],
+                    usage={"mock": True})
+            if len(observations) == 1:
+                return ModelResult(
+                    tool_calls=[ToolCall(id="wait", name="agents.wait", arguments={"id": observations[0]["id"]})],
+                    usage={"mock": True})
+            return ModelResult(text=json.dumps(observations[-1]), usage={"mock": True})
+
+    flow = {"name": "schema delegate", "steps": [{"id": "agent", "kind": "agent", "target": "parent", "input": {
+        "prompt": "count", "tools": ["agents.spawn", "agents.wait"],
+        "delegation": {"models": ["child"], "tools": []}}}]}
+
+    for obey in (True, False):
+        hub.models.bindings.pop("parent", None)
+        hub.models.bindings.pop("child", None)
+        child = Child(obey)
+        hub.models.register("parent", child, "parent", ["chat", "decision"])
+        hub.models.register("child", child, "child", ["chat", "decision"])
+        run = await hub.wait(hub.submit(flow), timeout=15)
+        assert run["status"] == "succeeded", run
+        result = json.loads(run["steps"][0]["output"]["text"])
+        if obey:
+            assert result["schema_valid"] is True and result["output"]["data"] == {"total": 5}
+            assert child.attempts == 2
+        else:
+            # Unverified, but the child's actual answer survives alongside the errors.
+            assert result["schema_valid"] is False and result["schema_errors"]
+            assert result["output"]["text"].startswith("Alice totals five")
+            assert result["schema_note"]
+
+
+async def test_spawn_refuses_a_contract_the_child_model_cannot_meet(hub):
+    """A structured result is a decision request; refuse it at spawn, not inside the child."""
+    class ChatOnly:
+        async def generate(self, request, model):
+            return ModelResult(text="plain answer", usage={"mock": True})
+
+    hub.models.register("chat-only", ChatOnly(), "chat-only", ["chat"])
+    # The parent runs the orchestration; chat-only is the (unsuitable) child it asks for.
+    flow = {"name": "unsatisfiable", "steps": [{"id": "agent", "kind": "agent", "target": "parent", "input": {
+        "prompt": "delegate", "tools": ["agents.spawn", "agents.wait"],
+        "delegation": {"models": ["chat-only"], "tools": []}}}]}
+
+    class Parent:
+        async def generate(self, request, model):
+            observations = [json.loads(m["content"]) for m in request.messages if m["role"] == "tool"]
+            if observations and isinstance(observations[-1].get("error"), dict):
+                return ModelResult(text="refused: " + observations[-1]["error"]["message"], usage={"mock": True})
+            return ModelResult(tool_calls=[ToolCall(id="s", name="agents.spawn", arguments={
+                "goal": "count", "model": "chat-only", "tools": [],
+                "response_schema": {"type": "object", "properties": {"total": {"type": "integer"}},
+                                    "required": ["total"]}})], usage={"mock": True})
+
+    hub.models.register("parent", Parent(), "parent", ["chat", "decision"])
+    run = await hub.wait(hub.submit(flow), timeout=15)
+    assert run["status"] == "succeeded", run
+    assert "cannot return a structured result" in run["steps"][0]["output"]["text"]
+    assert not run["children"]

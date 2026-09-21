@@ -385,3 +385,47 @@ async def test_compaction_backend_failure_falls_back_to_deletion(hub):
     assert "context.compacted" in kinds
     # The instruction survives even though the summariser never produced anything.
     assert "Keep original request" in json.dumps(run["steps"][0]["state"]["messages"])
+
+
+async def test_failing_summariser_backs_off_instead_of_retrying_every_turn(hub):
+    """A broken summariser must not be re-dialled on every turn of the same run."""
+    from easyagent.contracts import ModelResult, ToolCall, ToolSpec
+
+    source = """function handle(r){if(r.method.startsWith('lifecycle.'))return {result:{}};
+    if(r.method==='context')throw new Error('summariser unavailable');
+    return {result:{}};}"""
+    package = build_package(
+        {
+            "id": "ctxcooldown",
+            "revision": 1,
+            "title": "Unavailable context engine",
+            "backends": [{"kind": "context", "handler": "context", "operations": ["compact"]}],
+        },
+        {"extension.js": source},
+    )
+    await hub.extensions.install({"package": package})
+    hub.backends.select("context", {"extension": "ctxcooldown", "revision": 1})
+
+    async def bulky(args, ctx):
+        return {"number": args["number"], "text": "x" * 1100}
+
+    hub.tools.register(ToolSpec(name="fixture.bulky"), bulky)
+
+    class Model:
+        async def generate(self, request, model):
+            observed = [json.loads(m["content"])["number"] for m in request.messages if m["role"] == "tool"]
+            number = max(observed, default=0) + 1
+            if number > 5:
+                return ModelResult(text="done")
+            return ModelResult(tool_calls=[ToolCall(id=str(number), name="fixture.bulky", arguments={"number": number})])
+
+    hub.models.register("planner", Model(), "fixture", {"chat"})
+    run = await hub.wait(hub.submit({"name": "cooldown", "steps": [
+        {"id": "a", "kind": "agent", "target": "planner", "input": {
+            "prompt": "Keep original request", "tools": ["fixture.bulky"], "context_chars": 4000}}]}))
+    assert run["status"] == "succeeded", run
+    failures = [e for e in hub.store.events(run["id"]) if e["kind"] == "context.compaction_failed"]
+    # Five turns each cross the limit, but the failed summariser is only dialled once.
+    assert len(failures) == 1, failures
+    assert failures[0]["payload"]["retry_after_seconds"] == 60
+    assert failures[0]["payload"]["attempt"] == 1

@@ -56,6 +56,8 @@
 
 **（已实现）会话历史中不会被丢掉的任务提示。** 走会话历史的 run 若自带 `prompt` 而历史末尾不是它，现在会追加进去——原先该请求可能完全不进上下文。
 
+**（已实现）失败冷却阶梯。** 摘要器失败后进入 60s → 300s → 900s 递增冷却（每级只在再次失败时升级，成功即清零），避免 fail-open 退化成"每个回合重拨同一个坏摘要器"。对应 hermes 的 `_TIMEOUT_COOLDOWN_LADDER`。失败事件带 `retry_after_seconds` 与 `attempt`。
+
 **（未采纳）** pi 的 `reserveTokens/keepRecentTokens` 双旋钮我们已有等价物：`model_limits.discover()` 读服务端声明的窗口，`compact_for_model` 按 `available*0.8` 折算字符并保留 25% 给输出。hermes 的 micro-compaction 需要每轮一次额外摘要调用，与"压缩失败要能中止"的我们当前实现相比成本更高，暂不引入；codex 的"直接换新窗口"依赖服务端支持，我们不做。
 
 ---
@@ -79,6 +81,8 @@
 **（已实现）子 agent 提示词约定共享环境、不得再派发**（见 1.2）。
 
 **（既有设计得到印证，未改）** 我们的父子预算共享（`store.reserve` 逐级上溯）、`max_children` / `max_depth` 收窄继承、`spawn` 幂等槽位、合并写回执的 `reuse_writes`，与 hermes 的 fail-closed 继承和 loopx 的"子结果不可变"方向一致。`agents.wait` 的 `WaitingChildren` 让出 worker 的做法，等价于 loopx 强调的"子任务生命周期不占用父的执行权"。
+
+**（已实现）可选结果契约。** `agents.spawn` 接受 `response_schema`：子任务按该 schema 返回结构化结果；违反时父侧触发**恰好一轮**有界纠正（把子任务自己的被拒答案放回上下文，只修格式、不重做），仍不符则**不丢弃已完成的工作**——结果保留原文，并带 `schema_valid: false`、`schema_errors` 与 `schema_note` 标记为未验证。对应 hermes："重试后仍不匹配不丢弃 child 的工作"。契约在 `spawn` 当场校验：模型不支持 `decision` 能力时直接拒绝，而不是让子运行内部失败（父只能干看）。
 
 **（未采纳）** 未引入独立子进程隔离（pi 的做法），因为我们已有跨运行持久化与收窄授权，跨进程会破坏 `child_runs` 恢复；未引入 `forked_snapshot` 上下文模式，因为共享历史会让子任务继承父的隐私与 token 成本。
 
@@ -112,7 +116,14 @@
 | `src/easyagent/autonomy.py` | 提示词分层（易变内容置尾）；新增"工具输出写入文件与产物"纪律 |
 | `src/easyagent/delegation.py` | 子 agent 结果 32k 上限 + `result_hash`；子指令写明共享环境与不得再派发 |
 | `apps/agent/.../workspace-chat.js` | 活动流新增 `context.compaction_failed` 标签 |
-| `tests/integration/{test_backends,test_learning_delegation,test_autonomy}.py` | 三个新用例：压缩后端失败降级、子结果有界且带 hash、提示词稳定段先于易变段 |
+| `tests/integration/{test_backends,test_learning_delegation,test_autonomy}.py` | 五个新用例：压缩后端失败降级、失败摘要器退避、子结果有界且带 hash、子结果契约（纠正一轮 / 保留未验证工作 / 不可满足即拒）、提示词稳定段先于易变段 |
+
+## 第二轮：结果契约与失败退避（2026-09-21）
+
+在两处已识别但首轮未做的项上继续，理由都是"不补则会留下首轮改动带来的副作用"：
+
+1. **子 agent 结果契约**（hermes 的有界纠正轮）：见 3.2。
+2. **压缩失败冷却**（hermes 的 60/300/900 阶梯）：首轮让摘要器失败降级为纯删除（fail-open），代价是**每个后续回合都会重试同一个坏摘要器**。现在失败后进入递增冷却，成功清零。
 
 ## 验证
 
