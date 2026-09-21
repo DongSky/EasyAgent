@@ -5,9 +5,9 @@ concurrency:
   cancel-in-progress: true
 jobs:
   integration:
-    # Windows setup alone takes about five minutes; leave room for the full suite.
+    # Windows setup and the full suite exceed 40 minutes on hosted runners.
     # The per-test 120-second watchdog still catches stalled tests and fixtures.
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && 40 || 20 }}
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 60 || 20 }}
     strategy:
       fail-fast: false
       matrix:
