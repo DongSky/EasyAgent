@@ -176,7 +176,7 @@ async def test_pending_batch_survives_restart_without_replaying_success(tmp_path
             return ModelResult(text="done")
 
     def create():
-        hub = Hub(tmp_path / "restart.db", concurrency=1, poll_seconds=.01, lease_seconds=.2)
+        hub = Hub(tmp_path / "restart.db", concurrency=1, poll_seconds=.01, lease_seconds=10)
         hub.tools.register(ToolSpec(name="fixture.fast"), fast)
         hub.tools.register(ToolSpec(name="fixture.slow"), slow)
         hub.models.register("fixture", Model(), "fixture", ["chat"])
@@ -187,10 +187,17 @@ async def test_pending_batch_survives_restart_without_replaying_success(tmp_path
     identifier = first.submit({"name": "restart", "steps": [{"id": "agent", "kind": "agent", "target": "fixture",
                                 "input": {"prompt": "act", "tools": ["fixture.fast", "fixture.slow"]}}]})
     try:
-        await asyncio.wait_for(started.wait(), 2)
-        await asyncio.sleep(.05)
+        await asyncio.wait_for(started.wait(), 10)
+        async with asyncio.timeout(10):
+            while "observation" not in first.store.run(identifier)["steps"][0]["state"]["pending"][0]:
+                await asyncio.sleep(.01)
     finally:
         await first.stop()
+    # Exercise recovery from an expired owner without a subsecond lease also
+    # expiring during ordinary disk I/O on the restarted worker.
+    with first.store.transaction() as db:
+        assert db.execute("UPDATE steps SET lease_until=0 WHERE run_id=? AND status='running'",
+                          (identifier,)).rowcount == 1
     released.set()
     second = create()
     await second.start()
@@ -198,6 +205,7 @@ async def test_pending_batch_survives_restart_without_replaying_success(tmp_path
         run = await second.wait(identifier)
         assert run["status"] == "succeeded", run
         assert hits == ["fast"]
+        assert run["steps"][0]["attempts"] == 2
         assert run["usage"]["model_calls"] == 2 and run["usage"]["tool_calls"] == 2
     finally:
         await second.stop()

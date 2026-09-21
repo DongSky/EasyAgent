@@ -77,14 +77,14 @@ async def test_approval_restart_concurrent_resume_and_uncertain_write(tmp_path):
         calls += 1
         return {"receipt": ctx.invocation_id}
 
-    first = Hub(db, poll_seconds=0.01, lease_seconds=0.2)
+    first = Hub(db, poll_seconds=0.01, lease_seconds=10)
     first.tools.register(ToolSpec(name="external.write", effect="write", idempotent=False), write)
     run_id = first.submit({"name": "approval", "steps": [{"id": "a", "target": "external.write"}]})
     await first.start()
     run = await first.wait(run_id)
     assert calls == 0 and run["status"] == "waiting_approval"
     await first.stop()
-    second = Hub(db, poll_seconds=0.01, lease_seconds=0.2)
+    second = Hub(db, poll_seconds=0.01, lease_seconds=10)
     second.tools.register(ToolSpec(name="external.write", effect="write", idempotent=False), write)
     invocation_id = run["approvals"][0]["id"]
     second.tools.approve(second.store, invocation_id, True)
@@ -102,10 +102,10 @@ async def test_approval_restart_concurrent_resume_and_uncertain_write(tmp_path):
     await first.stop()
     inv = pending["approvals"][0]["id"]
     first.tools.approve(first.store, inv, True)
-    job = first.store.claim(0.1)
+    job = first.store.claim(10)
     with first.store.transaction() as conn:
         conn.execute("UPDATE invocations SET status='started' WHERE id=?", (inv,))
-    await asyncio.sleep(0.12)
+        conn.execute("UPDATE steps SET lease_until=0 WHERE run_id=?", (unknown,))
     await second.start()
     uncertain = await second.wait(unknown)
     assert uncertain["status"] == "needs_attention"
