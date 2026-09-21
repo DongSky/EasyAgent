@@ -107,10 +107,13 @@ async def test_library_general_decision_reuse_publish_and_platform_contracts(api
             hub.library.instantiate('library.decision.classify_receipt')
 
 
-async def test_media_submission_polling_restart_and_binary_artifact(tmp_path, monkeypatch):
+@pytest.mark.parametrize('stop_during_poll', [False, True])
+async def test_media_submission_polling_restart_and_binary_artifact(tmp_path, monkeypatch, stop_during_poll):
     counts = {'submit': 0, 'poll': 0, 'speech': 0}
     remote = FastAPI()
     ready = False
+    interrupt_poll = False
+    poll_entered, release_poll = asyncio.Event(), asyncio.Event()
     @remote.post('/v1/text_to_video')
     async def submit(request: Request):
         assert request.headers['authorization'] == 'Bearer media-fixture-key'
@@ -123,6 +126,9 @@ async def test_media_submission_polling_restart_and_binary_artifact(tmp_path, mo
     async def status(identifier: str):
         counts['poll'] += 1
         assert identifier == 'fixture-task'
+        if interrupt_poll:
+            poll_entered.set()
+            await release_poll.wait()
         return {'id': identifier, 'status': 'SUCCEEDED' if ready else 'RUNNING',
                 **({'output': ['https://example.com/protocol-fixture.mp4']} if ready else {})}
     audio = b'ID3\x04\x00\x00protocol-fixture-not-generated-audio'
@@ -153,7 +159,20 @@ async def test_media_submission_polling_restart_and_binary_artifact(tmp_path, mo
         # One worker remains free while an external job is running.
         other = await hub.wait(hub.submit({'name': 'Other work', 'steps': [{'id': 'ok', 'target': 'core.echo'}]}))
         assert other['status'] == 'succeeded'
+        if stop_during_poll:
+            interrupt_poll = True
+            await asyncio.wait_for(poll_entered.wait(), 30)
         await hub.stop()
+        release_poll.set()
+        stopped = hub.store.run(run_id)['steps'][1]
+        assert stopped['status'] in ('running', 'waiting_remote')
+        recovering = stopped['status'] == 'running'
+        if stop_during_poll:
+            assert recovering
+        if recovering:
+            # Simulate downtime until the interrupted owner's lease expires.
+            with hub.store.transaction() as db:
+                db.execute("UPDATE steps SET lease_until=0 WHERE run_id=? AND id='wait'", (run_id,))
         ready = True
         restored = Hub(tmp_path/'media.db', concurrency=1, poll_seconds=.01)
         await restored.start()
@@ -162,7 +181,11 @@ async def test_media_submission_polling_restart_and_binary_artifact(tmp_path, mo
             assert complete['status'] == 'succeeded', complete
             assert counts['submit'] == 1 and counts['poll'] >= 2
             assert complete['usage']['tool_calls'] == 2
-            assert complete['steps'][1]['attempts'] == 1
+            # A paused poll consumes no attempt; an interrupted active poll does.
+            assert complete['steps'][1]['attempts'] == 1 + int(recovering)
+            recovered = [e for e in restored.store.events(run_id) if e['kind'] == 'step.started'
+                         and e['payload']['step'] == 'wait' and e['payload']['recovered']]
+            assert len(recovered) == int(recovering)
             assert complete['steps'][1]['output']['output'] == ['https://example.com/protocol-fixture.mp4']
             restored.library.install('library.elevenlabs.speech', {'endpoint': endpoint+'/speech/{voice_id}'})
             step = restored.library.instantiate('library.elevenlabs.speech', {'input': {

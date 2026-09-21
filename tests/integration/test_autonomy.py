@@ -104,7 +104,9 @@ async def test_operator_builds_node_saves_workflow_remembers_and_delegates(api, 
                    'skill': {'name': 'csv-totals', 'description': 'Sum CSV amounts per customer', 'body': '1. Publish the aggregate node.\n2. Save the workflow.\n3. Verify totals.'},
                    'summary': 'built a node'}, dispatch=dispatch)
     hub.models.register('planner', model, 'fixture', ['chat', 'decision'])
-    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
+    # The second message follows a long idle period while the agent runs. Open a
+    # fresh fixture connection so server keep-alive expiry cannot reset that POST.
+    async with httpx.AsyncClient(base_url=url, timeout=30, limits=httpx.Limits(max_keepalive_connections=0)) as client:
         conversation = (await client.post('/v1/conversations', json={'workspace': True, 'model': 'planner'})).json()
         path = f"/v1/conversations/{conversation['id']}/messages"
         response = await client.post(path, json={'text': 'customer,amount\nAlice,2\nAlice,3 — 按客户汇总，并保存成可复用流程',
