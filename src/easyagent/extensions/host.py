@@ -457,6 +457,10 @@ class ExtensionHost:
                 "PATH",
                 "SYSTEMROOT",
                 "WINDIR",
+                # Python's Windows platform.machine() uses these to select
+                # native libraries, including the Wasmtime worker's DLL.
+                "PROCESSOR_ARCHITECTURE",
+                "PROCESSOR_ARCHITEW6432",
                 "LANG",
                 "TEMP",
                 "TMP",
