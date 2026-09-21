@@ -52,7 +52,8 @@ async def test_studio_no_code_low_code_export_and_auth(hub):
     app = create_app(hub, token="test-secret", manage_workers=False)
     install_studio(app, hub)
     mount_app(app)
-    async with live_server(app) as url, httpx.AsyncClient(base_url=url) as client:
+    # This functional scenario includes large uploads and durable workflow writes.
+    async with live_server(app) as url, httpx.AsyncClient(base_url=url, timeout=30) as client:
         assert (await client.get("/")).status_code == 200
         assert (await client.get("/v1/models")).status_code == 401
         upload = '/v1/artifacts/upload?name=reference.png'

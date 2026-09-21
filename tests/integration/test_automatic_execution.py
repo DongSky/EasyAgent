@@ -100,7 +100,7 @@ async def test_cancelled_uncertain_image_continues_in_place_only_on_user_request
     async def edit():
         calls.append(True)
         return image_response() if ready else JSONResponse({}, status_code=503)
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         install_image(hub, endpoint)
         waiting = await hub.wait(hub.submit({'name': 'old image failure', 'steps': [
             {'id': 'prepare', 'target': 'core.echo', 'input': {'original': 'preserve'}},

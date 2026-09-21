@@ -55,7 +55,10 @@ async def live_server(app):
     sock.bind(("127.0.0.1", 0))
     sock.setblocking(False)
     port = sock.getsockname()[1]
-    server = uvicorn.Server(uvicorn.Config(app, log_level="error"))
+    # A Windows reset can leave asyncio.Server.wait_closed pending even after
+    # Uvicorn has removed the connection. Bound cleanup so it cannot mask the
+    # original request failure or prevent the application's lifespan shutdown.
+    server = uvicorn.Server(uvicorn.Config(app, log_level="error", timeout_graceful_shutdown=5))
     task = asyncio.create_task(server.serve(sockets=[sock]))
     try:
         async with asyncio.timeout(10):
@@ -66,8 +69,10 @@ async def live_server(app):
         yield f"http://127.0.0.1:{port}"
     finally:
         server.should_exit = True
-        await asyncio.wait_for(task, 10)
-        sock.close()
+        try:
+            await asyncio.wait_for(task, 10)
+        finally:
+            sock.close()
 
 
 @pytest.fixture

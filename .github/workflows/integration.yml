@@ -29,7 +29,7 @@ jobs:
       - run: uv run --extra app --extra dev ruff check src sdk/python/src apps tests examples
       - run: cargo build --locked --manifest-path sdk/rust/Cargo.toml --examples
       - id: tests
-        run: uv run --extra app --extra dev pytest -x -v --tb=short --durations=20 tests/integration --junitxml=.eah/ci/junit.xml
+        run: uv run --extra app --extra dev pytest -x -v --tb=short --durations=20 -o junit_logging=log tests/integration --junitxml=.eah/ci/junit.xml
       - name: Report test failures
         if: failure() && steps.tests.outcome == 'failure'
         shell: python
@@ -50,11 +50,19 @@ jobs:
               for case in ET.parse(report).iter('testcase'):
                   for failure in list(case):
                       if failure.tag in ('failure', 'error'):
+                          trace = failure.text or ''
+                          if len(trace) > 2800:
+                              trace = trace[:1000] + '\n...\n' + trace[-1800:]
                           detail = (f"{case.get('classname')}.{case.get('name')}\n"
                                     + failure.get('message', '')[:500] + '\n'
-                                    + (failure.text or '')[-2500:])
+                                    + trace)
                           detail = detail.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
                           print(f'::error::{detail}')
+                          logs = case.findtext('system-out') or ''
+                          if logs.strip():
+                              detail = (f"{case.get('classname')}.{case.get('name')} captured logs\n" + logs[-3000:])
+                              detail = detail.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+                              print(f'::error::{detail}')
       - run: uv run --extra app python -m examples.demos.run_all
       - run: uv run --extra app python -m examples.demos.advanced
       - run: uv run --extra app python -m examples.demos.scenarios
