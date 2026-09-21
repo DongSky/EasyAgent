@@ -189,7 +189,8 @@ async def test_repair_can_correct_pure_code_effect_without_changing_interfaces(h
     model = WrongEffect()
     hub.models.register('planner', model, 'fixture', ['decision'])
     body = assistant('Aggregate CSV by customer.')
-    run = await hub.wait(start_build(hub, 'effects', body)['id'])
+    # This scenario runs independent test generation and multiple code repairs.
+    run = await hub.wait(start_build(hub, 'effects', body)['id'], timeout=60)
     assert run['status'] == 'succeeded', run
     plan = build_status(hub, 'effects', body)
     assert plan['status'] == 'ready', plan

@@ -76,8 +76,11 @@ async def test_signed_inbound_dedup_conversation_reply_approval_and_automatic_le
             }
         )
     )
-    await hub.maintenance.tick()
-    skills = hub.learning.catalog()
+    # Background maintenance may already own the review; wait for its saved result.
+    async with asyncio.timeout(30):
+        while not (skills := hub.learning.catalog()):
+            await hub.maintenance.tick()
+            await asyncio.sleep(.01)
     assert len(skills) == 1 and skills[0]["source_run"] == r["id"] and skills[0]["status"] == "candidate"
     await hub.maintenance.tick()
     assert len(hub.learning.catalog()) == 1

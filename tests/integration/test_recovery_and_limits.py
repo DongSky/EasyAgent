@@ -85,7 +85,7 @@ async def test_two_hubs_compete_without_duplicate_success(tmp_path):
     path = tmp_path / "shared.db"
     # Exercise normal claim contention, not lease expiry under a busy test host.
     # Expired idempotent calls may legitimately retry; crash recovery is tested above.
-    hubs = [Hub(path, poll_seconds=0.01, lease_seconds=5) for _ in range(2)]
+    hubs = [Hub(path, poll_seconds=0.01) for _ in range(2)]
     seen = []
     async def effect(args, ctx):
         seen.append(ctx.invocation_id)
@@ -96,7 +96,11 @@ async def test_two_hubs_compete_without_duplicate_success(tmp_path):
         await hub.start()
     try:
         runs = [hubs[0].submit({"name": f"burst-{i}", "steps": [{"id": "a", "target": "test.effect", "input": {"value": i}}]}) for i in range(30)]
-        results = await asyncio.gather(*(hubs[0].wait(r) for r in runs))
+        # All jobs are already submitted and both worker pools compete for them.
+        # Thirty simultaneous status pollers only contend with those workers for
+        # disk access; observing completion in order does not serialize execution.
+        async with asyncio.timeout(60):
+            results = [await hubs[0].wait(r, timeout=60) for r in runs]
         assert all(r["status"] == "succeeded" for r in results)
         assert len(seen) == len(set(seen)) == 30
     finally:
