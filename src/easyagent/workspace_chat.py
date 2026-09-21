@@ -132,10 +132,12 @@ class WorkspaceChat:
                                   'operator': list(Phase.OPERATOR), 'settled': list(Phase.SETTLED)}
         if conversation['workspace']:
             with self.store.connect() as db:
+                states = {r['turn_id']: r['state'] for r in db.execute(
+                    'SELECT j.turn_id,j.state FROM conversation_jobs j JOIN conversation_turns t ON t.id=j.turn_id '
+                    'WHERE t.conversation=?', (conversation['id'],))}
                 for turn in conversation['turns']:
-                    row = db.execute('SELECT state FROM conversation_jobs WHERE turn_id=?', (turn['id'],)).fetchone()
-                    if row:
-                        state = json.loads(row[0])
+                    if turn['id'] in states:
+                        state = json.loads(states[turn['id']])
                         turn['task'] = {k: v for k, v in state.items() if k not in ('candidates', 'request', 'workflow', 'assistant', 'route_workflow', 'context', 'material_text')}
                         if state.get('phase') == Phase.WAITING_CONNECTIONS:
                             turn['task']['can_resume'] = self.setup_changed(conversation, state)
@@ -390,10 +392,9 @@ Respond in the user's language. title is only used if creating a new workflow. F
             from .contracts import Workflow
             flow = self.hub.goals.reuse_writes(Workflow.model_validate(flow), self.store.run(previous)).model_dump()
         flow.setdefault('metadata', {}).update(workspace_conversation=turn['conversation'], workspace_turn=turn['id'])
-        checked = self.hub.prepare(flow).model_dump()
         state['selected'] = {k: candidate[k] for k in ('key', 'id', 'revision', 'title')}
         state['message'] = '使用「' + candidate['title'] + '」处理，进度会显示在下方。'
-        self.start_run(turn, state, 'executing', checked)
+        self.start_run(turn, state, 'executing', flow)
 
     def decide(self, turn, state, run):
         choice = DispatchDecision.model_validate(run['steps'][0]['output']['data'])
@@ -584,9 +585,9 @@ Respond in the user's language. title is only used if creating a new workflow. F
                 return self.begin(conversation, turn, state)
             if phase.endswith(Phase.STARTING_SUFFIX):
                 return self.resume_start(turn, state)
-            run = self.store.run(state['run_id'])
-            if run['status'] not in RUN_TERMINAL:
+            if self.store.run_status(state['run_id']) not in RUN_TERMINAL:
                 return
+            run = self.store.run(state['run_id'])
             if run['status'] != 'succeeded':
                 transient = any(s.get('retry_state', {}).get('error', {}).get('retryable') for s in run['steps'] if s['status'] == 'failed')
                 if not transient and run['children']:

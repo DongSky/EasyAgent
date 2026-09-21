@@ -211,9 +211,9 @@ class Conversations:
                     continue
                 active = conversation["active_run"]
                 if active:
-                    run = self.store.run(active)
-                    if run["status"] not in ("succeeded", "failed", "cancelled"):
+                    if self.store.run_status(active) not in ("succeeded", "failed", "cancelled"):
                         continue
+                    run = self.store.run(active)
                     with self.store.transaction() as db:
                         current = db.execute(
                             "SELECT active_run FROM conversations WHERE id=?", (item["id"],)

@@ -151,8 +151,8 @@ def create_app(hub, *, token="", manage_workers=True):
         return hub.store.runs(limit, query=query, statuses=status)
 
     @app.get("/v1/runs/{run_id}")
-    async def run(run_id: str):
-        return hub.store.run(run_id)
+    async def run(run_id: str, progress: bool = False):
+        return hub.store.run(run_id, progress=progress)
 
     @app.post("/v1/runs/{run_id}/cancel")
     async def cancel(run_id: str):

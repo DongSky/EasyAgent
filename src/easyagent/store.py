@@ -179,7 +179,25 @@ class Store:
             'SELECT e.mode FROM run_execution e JOIN ancestors a ON e.run_id=a.id LIMIT 1', (run_id,)).fetchone()
         return bool(row and row[0] == 'automatic')
 
-    def run(self, run_id):
+    def run_status(self, run_id):
+        with self.connect() as db:
+            row = db.execute("SELECT status FROM runs WHERE id=?", (run_id,)).fetchone()
+            if not row:
+                raise KeyError(run_id)
+            return row[0]
+
+    def execution_inputs(self, run_id):
+        """Read only the frozen inputs and completed outputs needed by a step."""
+        with self.connect() as db:
+            row = db.execute("SELECT json_extract(spec,'$.inputs') FROM runs WHERE id=?", (run_id,)).fetchone()
+            if not row:
+                raise KeyError(run_id)
+            outputs = {s['id']: json.loads(s['output']) if s['output'] is not None else None
+                       for s in db.execute("SELECT id,output FROM steps WHERE run_id=? AND status='succeeded'", (run_id,))}
+            outputs['$input'] = json.loads(row[0] or '{}')
+            return outputs
+
+    def run(self, run_id, *, progress=False):
         with self.connect() as db:
             row = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
             if not row:
@@ -187,8 +205,22 @@ class Store:
             result = dict(row)
             result["spec"] = json.loads(result["spec"])
             result['execution'] = 'automatic' if self.automatic(db, run_id) else 'confirm'
-            result["steps"] = [self.decode_step(s) for s in db.execute(
-                "SELECT * FROM steps WHERE run_id=? ORDER BY rowid", (run_id,))]
+            if progress:
+                result['steps'] = []
+                for s in db.execute("""SELECT id,status,attempts,ready_at,error,retry_state,
+                    (SELECT json_extract(value,'$.segments.turns') FROM json_each(s.state,'$.build_requests')
+                     WHERE json_type(value,'$.segments')='object'
+                       AND coalesce(json_extract(value,'$.segments.complete'),0)=0 LIMIT 1) AS build_turns,
+                    json_object('id',id,'kind',json_extract(spec,'$.kind'),
+                      'target',json_extract(spec,'$.target'),'depends_on',json_extract(spec,'$.depends_on')) AS spec
+                    FROM steps s WHERE run_id=? ORDER BY rowid""", (run_id,)):
+                    item = dict(s)
+                    for key in ('spec', 'retry_state'):
+                        item[key] = json.loads(item[key])
+                    result['steps'].append(item)
+            else:
+                result["steps"] = [self.decode_step(s) for s in db.execute(
+                    "SELECT * FROM steps WHERE run_id=? ORDER BY rowid", (run_id,))]
             result["approvals"] = [dict(a) | {"arguments": json.loads(a["arguments"])} for a in db.execute(
                 """WITH RECURSIVE tree(id) AS (SELECT ? UNION ALL SELECT c.child_id FROM child_runs c JOIN tree ON c.parent_id=tree.id)
                 SELECT i.id,i.tool,i.arguments,i.status,i.run_id FROM invocations i
@@ -207,6 +239,11 @@ class Store:
             result["usage"] = dict(usage) if usage else {}
             from .run_retry import retry_options
             result['retry'] = retry_options(db, result)
+            if progress:
+                result['spec'] = {'name': result['name'], 'metadata': {
+                    k: v for k, v in result['spec'].get('metadata', {}).items()
+                    if k in ('operator', 'step_labels')}}
+                result['progress'] = True
             return result
 
     def runs(self, limit=100, query="", statuses=()):

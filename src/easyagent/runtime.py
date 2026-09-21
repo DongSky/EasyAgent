@@ -593,11 +593,7 @@ class Hub:
                               and self.tools.regeneratable_media(spec.target, spec.tool_revision))
             if not regenerate:
                 raise ValueError("step recovery/attempt budget exhausted")
-        outputs = {
-            s["id"]: s["output"] for s in self.store.run(job["run_id"])["steps"] if s["status"] == "succeeded"
-        }
-        run = self.store.run(job["run_id"])
-        outputs["$input"] = run["spec"].get("inputs", {})
+        outputs = self.store.execution_inputs(job['run_id'])
         if spec.when and resolve({"$ref": spec.when["source"]}, outputs) != spec.when["equals"]:
             raise ConditionSkipped()
         literal_fields = (

@@ -1,6 +1,7 @@
 export function stepStatus(run,step,statuses){
   if(step.status==='retrying')return '等待自动重试';
   if(step.status==='running'){
+    if(step.build_turns!=null)return `正在分段构建 · 第 ${step.build_turns} 轮`;
     const segments=Object.values(step.state?.build_requests||{}).map(r=>r.segments).find(s=>s&&!s.complete);
     if(segments)return `正在分段构建 · 第 ${segments.turns} 轮`;
   }

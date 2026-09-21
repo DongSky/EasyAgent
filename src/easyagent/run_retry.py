@@ -23,7 +23,11 @@ def legacy_build_budget(spec):
 
 
 def retry_options(db, run, _nested=False):
-    steps = db.execute("SELECT * FROM steps WHERE run_id=?", (run['id'],)).fetchall()
+    steps = db.execute("""SELECT id,status,error,retry_state,
+        json_object('target',json_extract(spec,'$.target')) AS spec,
+        json_object('compensation',json_extract(state,'$.compensation')) AS state,
+        CASE WHEN id='verify' AND json_extract(spec,'$.target')='development.verify_build'
+             THEN output ELSE NULL END AS output FROM steps WHERE run_id=?""", (run['id'],)).fetchall()
     spec = json.loads(run['spec']) if isinstance(run['spec'], str) else run['spec']
     invalid_verification = [s for s in steps if s['id'] == 'verify' and s['status'] == 'succeeded'
                             and json.loads(s['spec']).get('target') == 'development.verify_build'

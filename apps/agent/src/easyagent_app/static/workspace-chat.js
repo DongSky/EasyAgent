@@ -1,4 +1,4 @@
-import {stepStatus} from './run-status.js?v=20260921-operator-8';
+import {stepStatus} from './run-status.js?v=20260921-streamline-1';
 import {retryPanel,bindRetry} from './run-retry.js?v=20260921-operator-8';
 import {modelChoices} from './model-choice.js';
 import {toolLabels} from './ui-labels.js';
@@ -148,13 +148,13 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
     if(rebuilt){
       entry.lastGraph=key;graph.innerHTML=graphHTML(run);
       graph.querySelectorAll('[data-node]').forEach(button=>{
-        button.onclick=()=>{
+        button.onclick=guard(async()=>{
           entry.details.hidden=false;
           const toggle=entry.root.querySelector('[data-details-toggle]');
           toggle.textContent='收起步骤与结果';toggle.setAttribute('aria-expanded','true');
-          renderRun(entry.run,entry.details);
+          await showDetails(entry);
           entry.details.scrollIntoView({block:'nearest',behavior:reducedMotion.matches?'auto':'smooth'});
-        };
+        });
         button.addEventListener('animationend',e=>{if(e.animationName==='chatNodeComplete')button.classList.remove('just-completed');});
       });
     }
@@ -184,29 +184,35 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
       if(edge.dataset.status!==status){edge.dataset.status=status;edge.setAttribute('class','chat-edge state-'+status);}
     });
   }
+  async function showDetails(entry){
+    const id=entry.run?.id;if(!id)return;
+    const full=entry.run.progress?await api('/v1/runs/'+id):entry.run;
+    if(entry.run?.id!==id||entry.details.hidden||!entry.root.isConnected)return;
+    renderRun(full,entry.details);
+  }
   function ensureCard(turn){
     let entry=cards.get(turn.id);if(entry)return entry;
     const root=document.createElement('article');root.className='chat-turn';root.dataset.turn=turn.id;
     root.innerHTML='<div class="chat-user-message"><small>你</small><div data-user></div><div class="chat-sent-files" data-sent-files></div></div><div class="chat-task-card"><div data-card-heading></div><div data-graph></div><div data-children></div><div class="chat-activity" data-activity hidden></div><div data-choices class="chat-choices"></div><div class="chat-result-message" data-reply></div><div data-setup></div><div data-retry></div><div class="chat-result-media" data-media></div><div class="chat-task-actions"><button class="text-button" data-details-toggle aria-expanded="false">展开步骤与结果</button><button class="text-button" data-edit hidden>在画布中打开 ↗</button></div><div class="chat-task-details" data-details hidden></div></div>';
     entry={root,details:root.querySelector('[data-details]'),media:root.querySelector('[data-media]'),lastDetail:'',lastMedia:'',lastGraph:'',events:[],eventCursor:0,eventRun:null};cards.set(turn.id,entry);$('[data-timeline]').append(root);
-    root.querySelector('[data-details-toggle]').onclick=guard(async e=>{entry.details.hidden=!entry.details.hidden;e.currentTarget.setAttribute('aria-expanded',String(!entry.details.hidden));e.currentTarget.textContent=entry.details.hidden?'展开步骤与结果':'收起步骤与结果';if(entry.details.hidden)stopWatch(entry.details);else if(entry.run)renderRun(entry.run,entry.details);});
+    root.querySelector('[data-details-toggle]').onclick=guard(async e=>{entry.details.hidden=!entry.details.hidden;e.currentTarget.setAttribute('aria-expanded',String(!entry.details.hidden));e.currentTarget.textContent=entry.details.hidden?'展开步骤与结果':'收起步骤与结果';if(entry.details.hidden)stopWatch(entry.details);else if(entry.run)await showDetails(entry);});
     return entry;
   }
   async function paint(c){
     const history=historyRows.find(r=>r.id===c.id);if(history&&history.active_run!==c.active_run){history.active_run=c.active_run;drawHistory();}
     chosenModel=c.model;turnBusy=!!c.active_run||c.turns.some(t=>!['succeeded','failed','cancelled','waiting_connections','steered'].includes(t.status));drawModel();
-    workingTurn=c.turns.find(t=>['starting','running'].includes(t.status)&&t.task?.phase?.startsWith('working'))||null;
+    workingTurn=c.turns.find(t=>['starting','running'].includes(t.status)&&c.phases.operator.some(p=>t.task?.phase===p||t.task?.phase===p+'_starting'))||null;
     $('[data-send]').textContent=workingTurn?'补充要求 ↑':'发送 ↑';$('[data-text]').placeholder=workingTurn?'任务正在自主处理；发送的内容会补充给它':'输入需求，或拖入附件';
     const pinned=nearBottom();$('[data-title]').textContent=c.title;$('[data-welcome]').hidden=c.turns.length>0;$('[data-stop]').hidden=!c.turns.some(t=>!['succeeded','failed','cancelled'].includes(t.status));
     for(const turn of c.turns){
       const state=turn.task;if(!state)continue;const entry=ensureCard(turn),root=entry.root,find=s=>root.querySelector(s);
       find('[data-user]').textContent=turn.text;
       const attachments=state.attachments||[];find('[data-sent-files]').innerHTML=attachments.map(a=>`<button data-file="${escape(a.id)}">${glyph(a.kind)} ${escape(a.name)}</button>`).join('');find('[data-sent-files]').querySelectorAll('button').forEach(b=>b.onclick=guard(()=>downloadArtifact(attachments.find(a=>a.id===b.dataset.file))));
-      let run=null;if(state.run_id){run=runCache.get(state.run_id);if(!run||!['succeeded','failed','cancelled'].includes(run.status)||['starting','running'].includes(turn.status)){run=await api('/v1/runs/'+state.run_id);runCache.set(run.id,run);}if(c.id!==selected)return;entry.run=run;}
-      const labels={queued:'已收到',routing:'正在匹配合适的流程',building:'正在创建新流程',working:'正在自主处理',executing:'正在执行',completed:'处理完成',waiting_connections:'已保存 · 等待连接模型或服务',superseded:'已合并到后续消息',steered:'已补充到当前任务',clarification:'需要补充一点信息',answered:'回复',failed:'处理遇到问题',cancelled:'已停止'};
+      let run=null;if(state.run_id){run=runCache.get(state.run_id);if(!run||!['succeeded','failed','cancelled'].includes(run.status)||['starting','running'].includes(turn.status)){run=await api('/v1/runs/'+state.run_id+'?progress=true');if(['succeeded','failed','cancelled'].includes(run.status))run=await api('/v1/runs/'+state.run_id);runCache.set(run.id,run);}if(c.id!==selected)return;entry.run=run;}
+      const labels=c.phases.labels;
       const title=state.selected?.title||labels[state.phase]||'正在安排';
       const finished=run?.steps.filter(s=>['succeeded','skipped'].includes(s.status)).length||0;
-      const active=run?['queued','running'].includes(run.status):['queued','routing','building','working','executing'].includes(state.phase);
+      const active=run?['queued','running'].includes(run.status):c.phases.active.includes(state.phase);
       const retryWaiting=run?.steps.some(s=>s.status==='retrying')&&!run.steps.some(s=>s.status==='running');
       const label=retryWaiting?'等待自动重试':active&&state.phase==='failed'?'正在继续处理':run&&['executing','working'].includes(state.phase)?(state.phase==='working'&&['queued','running'].includes(run.status)?'正在自主处理':statuses[run.status]||run.status):labels[state.phase]||'正在安排';
       const heading=`<div class="chat-task-heading"><span class="chat-task-mark ${active?'is-working':''}">${active?'✦':state.phase==='completed'?'✓':state.phase==='failed'?'!':'✦'}</span><div><b>${escape(title)}</b><p>${escape(label)}${state.selected?' · 固定版本 v'+state.selected.revision:''}</p></div>${run&&['executing','completed'].includes(state.phase)?`<span class="chat-step-count">${finished}/${run.steps.length}</span>`:''}</div>${state.reason?`<p class="chat-route-reason">${escape(state.reason)}</p>`:''}`;
@@ -230,9 +236,9 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
       find('[data-edit]').hidden=!state.selected;find('[data-edit]').onclick=guard(async()=>{const saved=await api(`/v1/studio/workflows/${encodeURIComponent(state.selected.id)}?revision=${state.selected.revision}`);loadWorkflow(saved.workflow,saved);showTab('workflow');});
       find('[data-details-toggle]').hidden=!run;
       if(run){
-        const wait=['waiting_approval','waiting_input','needs_attention'].includes(run.status),detailKey=JSON.stringify([run.status,run.approvals,run.input_requests,run.reconciliations,run.steps.map(s=>[s.id,s.status,s.attempts,s.ready_at,s.error]),run.children]);
+        const wait=['waiting_approval','waiting_input','needs_attention'].includes(run.status),detailKey=JSON.stringify([run.status,run.approvals,run.input_requests,run.reconciliations,run.steps.map(s=>[s.id,s.status,s.attempts,s.ready_at,s.error,s.build_turns]),run.children]);
         if(wait&&entry.lastDetail!==detailKey){entry.details.hidden=false;find('[data-details-toggle]').setAttribute('aria-expanded','true');find('[data-details-toggle]').textContent='收起步骤与结果';}
-        if(!entry.details.hidden&&entry.lastDetail!==detailKey){renderRun(run,entry.details);entry.lastDetail=detailKey;}
+        if(!entry.details.hidden&&entry.lastDetail!==detailKey){await showDetails(entry);entry.lastDetail=detailKey;}
         if(run.status==='succeeded'&&state.phase==='completed'&&entry.lastMedia!==run.id){
           const found=new Map();function visit(v){if(!v||typeof v!=='object')return;if(v.id&&v.digest&&v.media_type&&!attachments.some(a=>a.id===v.id))found.set(v.id,v);Object.values(v).forEach(visit);}run.steps.forEach(s=>visit(s.output));
           // Operator final answers contain text; its artifacts live in tool receipts and child runs.

@@ -3,7 +3,7 @@ import {goalResult} from './goals.js?v=20260920-nodes-1';
 import {toolLabel} from './ui-labels.js';
 import { graphEditor } from './graph-editor.js';
 import {runHistory} from './run-history.js';
-import {stepStatus} from './run-status.js?v=20260921-operator-8';
+import {stepStatus} from './run-status.js?v=20260921-streamline-1';
 import {retryPanel,bindRetry,retryProgress,readableError} from './run-retry.js?v=20260921-operator-8';
 
 let shell=null;
@@ -131,7 +131,7 @@ import {backendSettings} from './backend-settings.js?v=20260921-operator-8';
 backendSettings({api,escape,flash});
 import {voiceStudio} from './voice.js';
 voiceStudio({api,escape,flash,token:()=>token});
-import {workspaceChat} from './workspace-chat.js?v=20260921-operator-8';
+import {workspaceChat} from './workspace-chat.js?v=20260921-streamline-1';
 workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,loadWorkflow,token:()=>token,download,statuses});
 import {workspaceUI} from './workspace-ui.js?v=20260920-nodes-1';
 shell=workspaceUI({api,escape,flash,showTab,renderRunHistory,listWorkflows});
