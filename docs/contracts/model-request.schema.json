@@ -102,6 +102,10 @@
       "title": "Prompt",
       "type": "string"
     },
+    "context": {
+      "default": null,
+      "title": "Context"
+    },
     "parameters": {
       "additionalProperties": true,
       "title": "Parameters",

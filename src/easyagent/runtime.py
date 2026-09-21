@@ -714,6 +714,11 @@ class Hub:
                                           and history[-1].get("content") == config.prompt):
                     state["messages"].append({"role": "user", "content": config.prompt})
             state["pinned_requests"] = _pin_request(state["messages"], config.prompt)
+            if config.context is not None:
+                from .contracts import context_text
+                material = {'role': 'user', 'content': context_text(config.context)}
+                state['messages'].append(material)
+                state['pinned_requests'].append(encode(material))
             await self.extensions.dispatch("agent.start", {"model": model}, job=job)
             sources = []
             for namespace in config.knowledge:
@@ -1090,6 +1095,7 @@ class Hub:
             self.store.checkpoint(job, state)
 
     async def generate(self, job, request):
+        request = request.with_context()
         context = await self.extensions.dispatch("context.transform", {"messages": request.messages}, job=job)
         request = request.model_copy(update={"messages": context["messages"]})
         transformed = await self.extensions.dispatch("model.before_request", request.model_dump(), job=job)

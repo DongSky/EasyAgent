@@ -99,6 +99,17 @@ def input_contract(flow):
     return {'type': 'object', 'properties': {n: {} for n in sorted(names)}, 'required': sorted(required), 'additionalProperties': False}
 
 
+def workflow_inputs(flow, inputs):
+    """Ignore empty runtime placeholders injected by older builders outside an explicit contract."""
+    values = {**flow.get('inputs', {}), **inputs}
+    schema = input_contract(flow)
+    if schema.get('additionalProperties') is False:
+        for key, empty in (('message', ''), ('attachment_ids', []), ('attachments', [])):
+            if key not in schema.get('properties', {}) and key not in inputs and values.get(key) == empty:
+                values.pop(key, None)
+    return values
+
+
 def routing_steps(hub, flow):
     """Expose the actual frozen child operations, including their data wiring."""
     def describe(workflow):
@@ -138,7 +149,7 @@ class WorkspaceChat:
                 for turn in conversation['turns']:
                     if turn['id'] in states:
                         state = json.loads(states[turn['id']])
-                        turn['task'] = {k: v for k, v in state.items() if k not in ('candidates', 'request', 'workflow', 'assistant', 'route_workflow', 'context', 'material_text')}
+                        turn['task'] = {k: v for k, v in state.items() if k not in ('candidates', 'request', 'workflow', 'assistant', 'route_workflow', 'context', 'material_text', 'routing_compact', 'routing_stage')}
                         if state.get('phase') == Phase.WAITING_CONNECTIONS:
                             turn['task']['can_resume'] = self.setup_changed(conversation, state)
                         turn['task'].pop('inventory', None)
@@ -292,6 +303,8 @@ class WorkspaceChat:
             state.pop('resume_build', None)
             return self.resume_build(turn, state)
         key = 'workspace-chat:' + turn['id'] + ':' + phase
+        if phase == Phase.ROUTING and state.get('routing_stage') == 'verify':
+            key += ':verify'
         if state.get('repair_attempt'):
             key += ':repair-' + str(state['repair_attempt'])
         run_id = self.hub.submit(state['workflow'], key, execution=state['request'].get('execution', 'confirm'))
@@ -323,7 +336,7 @@ class WorkspaceChat:
             if engine == 'operator':
                 return self.begin_operator(conversation, turn, state)
             return self.begin_build(turn, state, turn['text'][:60])
-        candidates = self.catalog()
+        candidates = [] if state['request']['intent'] == 'chat' else self.catalog()
         if engine == 'operator' and state['request']['intent'] == 'auto' and not candidates:
             # Nothing saved to match against: skip the routing call and act directly.
             return self.begin_operator(conversation, turn, state)
@@ -337,6 +350,12 @@ class WorkspaceChat:
         state['candidates'] = candidates
         catalog = [{k: v for k, v in c.items() if k != 'workflow'} |
                    {'steps': routing_steps(self.hub, c['workflow'])} for c in candidates]
+        # Small or explicitly selected catalogs keep one round. Large catalogs use
+        # compact operation inventory for discovery, then inspect exact frozen wiring.
+        state['routing_compact'] = not selected and len(catalog) > 1 and len(encode(catalog)) > 16000
+        if state['routing_compact']:
+            from .workflow_planning import summarize_steps
+            catalog = [{k: v for k, v in c.items() if k != 'steps'} | summarize_steps(c['steps']) for c in catalog]
         material = []
         for a in state['attachments']:
             item = {k: a[k] for k in ('id', 'name', 'kind', 'media_type', 'size')}
@@ -362,6 +381,10 @@ Only request missing business inputs; missing runtime access will be reported by
 Input message is injected from the current user material, attachment_ids contains the uploaded IDs, attachments contains file descriptors.
 Map a file into a named input such as reference_artifact only using its actual uploaded ID. Never pretend you have seen media content from filenames.
 Respond in the user's language. title is only used if creating a new workflow. For intent=chat answer conversationally without choosing or creating a workflow.'''
+        if state['routing_compact']:
+            instruction += ('\nThis catalog is an operation inventory, not full wiring. action=use proposes a candidate '
+                            'for mandatory detailed inspection; it cannot execute anything yet. Select the best candidate '
+                            'when its operations may fit; do not invent its internal wiring or treat its title as proof.')
         context = {'conversation': state['context'], 'request': state.get('material_text', turn['text']), 'intent': state['request']['intent'], 'selected_workflow': selected, 'attachments': material, 'catalog': catalog}
         context_json = json.dumps(context, ensure_ascii=False)
         if len(context_json) > 180_000:
@@ -380,7 +403,7 @@ Respond in the user's language. title is only used if creating a new workflow. F
         fields = set(schema.get('properties', {}))
         if set(inputs) - fields:
             raise ValueError('匹配结果包含流程未声明的输入，请明确需要填写的业务字段。')
-        values = {**flow.get('inputs', {}), **inputs}
+        values = workflow_inputs(flow, inputs)
         material = state.get('material_text', turn['text'])
         reserved = {'message': material, 'attachments': state['attachments'], 'attachment_ids': state['attachment_ids']}
         values.update({k: v for k, v in reserved.items() if k in fields})
@@ -407,6 +430,26 @@ Respond in the user's language. title is only used if creating a new workflow. F
         if explicit and (choice.action == 'create' or (choice.action == 'use' and choice.candidate != explicit)):
             raise ValueError('匹配结果与指定流程不一致，未执行。')
         if choice.action == 'use' and (choice.confidence >= .82 or explicit):
+            if state.get('routing_compact'):
+                candidate = choices[choice.candidate]
+                flow = copy.deepcopy(state['workflow'])
+                request = flow['steps'][0]['input']
+                context = json.loads(request['messages'][1]['content'])
+                context['catalog'] = [{k: v for k, v in candidate.items() if k != 'workflow'} |
+                                      {'steps': routing_steps(self.hub, candidate['workflow'])}]
+                context['proposed_workflow'] = candidate['key']
+                request['messages'][0]['content'] += ('\nThe catalog now contains the exact frozen steps of the proposed '
+                    'candidate. Verify that its actual operations AND input wiring fulfill the original request. '
+                    'Return use only if they do; otherwise create for a task requiring new processing, or clarify '
+                    'only missing business facts. The proposed workflow is not an explicit user selection or proof of suitability.')
+                request['messages'][1]['content'] = json.dumps(context, ensure_ascii=False)
+                if len(request['messages'][1]['content']) > 180_000:
+                    state['phase'] = Phase.CLARIFICATION
+                    return self.finish(turn, state, 'succeeded', '所选流程的详细材料过大，尚未执行。请缩小流程或材料范围。')
+                state.update(candidates=[candidate], routing_compact=False, routing_stage='verify',
+                             message='已找到候选流程，正在核对实际步骤与输入…')
+                self.start_run(turn, state, Phase.ROUTING, flow)
+                return
             state['reason'] = choice.message
             try:
                 return self.bind(turn, state, choices[choice.candidate], choice.inputs)
@@ -467,7 +510,7 @@ Respond in the user's language. title is only used if creating a new workflow. F
                     self.store.cancel(build['id'])
 
     def repair(self, turn, state, run):
-        """Continue a failed newly built task with receipts, never blindly replay completed effects."""
+        """Repair a failed automatic task with receipts, without replaying completed effects."""
         attempt = state.get('repair_attempt', 0) + 1
         identifier = 'chat-' + turn['id'] + '-repair-' + str(attempt)
         assistant = state['assistant']
@@ -598,8 +641,20 @@ Respond in the user's language. title is only used if creating a new workflow. F
                             (run['id'],)))
                 explicit_stop = any(s.get('retry_state', {}).get('error', {}).get('category') in ('budget', 'configuration')
                                     for s in run['steps'] if s['status'] == 'failed')
+                if (run['status'] == 'failed' and phase == Phase.EXECUTING and not transient and not explicit_stop
+                        and not state.get('assistant') and state['request']['intent'] == 'auto'
+                        and not state['request'].get('workflow')
+                        and state['request'].get('execution') == 'automatic'):
+                    # Reuse the existing receipt-preserving repair path once for an
+                    # automatically selected template. Explicit pinned runs stay pinned.
+                    from .studio import Assistant
+                    state['assistant'] = Assistant(construction='automatic', model=state['model'],
+                        name=run['name'][:100], purpose=state.get('material_text', turn['text'])[:12000],
+                        limits=run['spec']['limits']).model_dump()
+                    state['saved_workflow_recovery'] = True
                 if (run['status'] == 'failed' and not transient and not explicit_stop
-                        and phase in Phase.REPAIRABLE and state.get('assistant')):
+                        and phase in Phase.REPAIRABLE and state.get('assistant')
+                        and not (state.get('saved_workflow_recovery') and state.get('repair_attempt', 0) >= 1)):
                     return self.repair(turn, state, run)
                 if phase in Phase.OPERATOR and not transient:
                     # Failed autonomous tasks are remembered too, so the next attempt starts informed.

@@ -127,6 +127,8 @@ flowchart TD
 
 可配置 `max_attempts`、`timeout_seconds`、`not_before`、`requires_approval`、`when` 和 `compensate`。`workflow_ref={id,revision}` 引用保存版本；省略版本在准备时解析并固定，不在运行中追随最新。完整字段见[Workflow Schema](contracts/workflow.schema.json)。
 
+模型和 Agent 节点支持 `input.context`，例如 `{"context":{"orders":{"$ref":"parse.data"}}}`；必须声明 `parse` 依赖。运行时将已解析的数据追加为一条用户上下文，无需另建 `core.to_text` 节点。指令仍放在 prompt/messages 中，Agent 上下文在多轮工具调用中保留且不重复注入。相同重试边界的纯计算可以合并；写入、审批和远程等待保留独立节点，独立分支按真实依赖并行。构造规则与实测见[两批精简记录](WORKFLOW_STREAMLINING.md)。
+
 ### REST 与 Schema
 
 运行实例的 `/openapi.json` 是端点/输入结构依据，`/docs` 可交互查看。核心入口：
@@ -136,6 +138,8 @@ flowchart TD
 - `POST /v1/approvals/{id}` 提交 `{approved}`；`POST /v1/inputs/{id}` 提交符合问题 Schema 的对象。
 - `POST /v1/reconciliations/{id}` 提交 `{output,receipt}`，用于核验未知写结果。
 - `/v1/tools`、`/v1/models`、`/v1/skills` 提供目录；`/v1/studio/workflows` 管理保存定义。
+
+轮询进度可用 `GET /v1/runs/{id}?progress=true`：保留图、状态、审批、输入请求、重试、用量和子运行，省略步骤输入、输出和 Agent 历史。响应含 `progress: true`；查看结果时使用默认完整接口。
 
 提交可以携带 `Idempotency-Key`；同 key 不同定义会冲突。公开契约拒绝未知字段。错误有 `detail`；401/403 是认证/授权，404 是资源缺失，409 是版本/状态冲突，422 是输入校验。不要把所有错误统一当作可重试。
 

@@ -67,6 +67,50 @@ DELEGATION_REQUEST = """创建并运行一个可重复使用的文字复核流�
 本次待复核内容：『订单单价 12 元、数量 3 件，总额 35 元。活动仅周六开放，但欢迎大家本周日到场。』
 流程的 message 输入保留这段待复核内容，以后可以替换成其他文字。报告必须指出正确总额和时间冲突。"""
 
+GROUPING_REQUEST = """请创建并运行一个以后可以重复使用的订单对账流程。我会提供 left_csv 和 right_csv 两份订单数据。
+处理时去掉客户名两侧空白，忽略 status 为 refunded 的行，分别按客户汇总金额，再合并两份汇总。
+生成 totals.json（客户名到总金额的对象），以及一份简短的中文 summary.md，说明总金额、客户数和金额最高的客户。
+本次 left_csv：
+customer,amount,status
+ Alice ,12,paid
+Bob,4,paid
+Alice,3,paid
+Bob,99,refunded
+本次 right_csv：
+customer,amount,status
+Bob,6,paid
+Carol,8,paid
+Alice,2,paid
+保存好流程，以后输入数据会变化。"""
+
+GROUPING_REUSE = """运行刚才保存的订单对账流程，这次换成下面的数据：
+left_csv:
+customer,amount,status
+ Dana ,3.5,paid
+Eli,11,paid
+Dana,6.5,paid
+Eli,999,refunded
+right_csv:
+customer,amount,status
+Eli,-1.25,paid
+Finn,7,paid
+Dana,2,paid
+仍然生成 totals.json 和 summary.md。"""
+
+
+def assert_grouping(hub, record):
+    selected = record['turn']['task']['selected']
+    saved = hub.development.get('workflow', selected['id'], selected['revision'])
+    steps = saved['workflow']['steps']
+    assert len(steps) == 3, 'Expected one computation and two durable file outputs'
+    compute = [s for s in steps if s['kind'] == 'tool']
+    assert len(compute) == 1 and hub.tools.spec(compute[0]['target']).effect == 'read'
+    assert sum(s['kind'] == 'artifact' for s in steps) == 2
+    assert all(s['depends_on'] == [compute[0]['id']] for s in steps if s['kind'] == 'artifact')
+    reports = [hub.artifacts.get(a['id'])[1].decode() for a in record['artifacts'] if a['name'] == 'summary.md']
+    assert reports, 'Missing summary.md'
+    return reports
+
 
 @asynccontextmanager
 async def serve(app):
@@ -236,22 +280,32 @@ async def main(args):
                     assert not errors, errors
                     summary["passed"] = True
                     return
-                first = await send(page, hub, WORKFLOW_REQUEST, args.timeout, "create", output, "create", args.model)
-                assert_totals(hub, first, {"Alice": 19, "Bob": 12.5, "Carol": 9})
+                first = await send(page, hub, GROUPING_REQUEST if args.group_operations else WORKFLOW_REQUEST,
+                                   args.timeout, "auto" if args.group_operations else "create", output, "create", args.model)
+                assert_totals(hub, first, {"Alice": 17, "Bob": 10, "Carol": 8} if args.group_operations
+                              else {"Alice": 19, "Bob": 12.5, "Carol": 9})
                 published = [c for c in hub.code.list() if c["status"] == "published"]
                 assert published, "Agent did not create/test/publish a new node"
                 selected = first["turn"]["task"]["selected"]
                 saved = hub.development.get("workflow", selected["id"], selected["revision"])
                 steps = saved["workflow"]["steps"]
-                assert any(len(s["depends_on"]) >= 2 for s in steps), "Workflow has no parallel-branch join"
-                assert sum(not s["depends_on"] for s in steps) >= 2, "Independent input branches were serialized"
+                if args.group_operations:
+                    reports = assert_grouping(hub, first)
+                    assert any(all(v in r for v in ['35', '3', 'Alice', '17']) for r in reports), reports
+                else:
+                    assert any(len(s["depends_on"]) >= 2 for s in steps), "Workflow has no parallel-branch join"
+                    assert sum(not s["depends_on"] for s in steps) >= 2, "Independent input branches were serialized"
                 executed = [json.loads(c["output"]) for c in first["calls"] if c["tool"] == "workflows.run" and c["status"] == "succeeded"]
                 assert any(r["status"] == "succeeded" and r["revision"] == selected["revision"] for r in executed)
-                summary["checks"]["create_node_workflow_parallel_join_artifact"] = True
+                summary["checks"]["group_pure_operations" if args.group_operations else "create_node_workflow_parallel_join_artifact"] = True
                 # A second browser message reuses the exact graph with held-out data.
                 await page.reload()
-                second = await send(page, hub, REUSE_REQUEST, args.timeout, selected["key"], output, "reuse")
+                second = await send(page, hub, GROUPING_REUSE if args.group_operations else REUSE_REQUEST,
+                                    args.timeout, selected["key"], output, "reuse")
                 assert_totals(hub, second, {"Dana": 12, "Eli": 9.75, "Finn": 7})
+                if args.group_operations:
+                    reports = assert_grouping(hub, second)
+                    assert any(all(v in r for v in ['28.75', '3', 'Dana', '12']) for r in reports), reports
                 assert len([c for c in hub.code.list() if c["status"] == "published"]) == len(published)
                 assert hub.development.get("workflow", selected["id"])["revision"] == selected["revision"]
                 summary["checks"]["reuse_with_unseen_data"] = True
@@ -281,5 +335,6 @@ if __name__ == "__main__":
     parser.add_argument("--output", default=".eah/live-agent-acceptance")
     parser.add_argument("--skip-delegation", action="store_true")
     parser.add_argument("--only-delegation", action="store_true")
+    parser.add_argument("--group-operations", action="store_true", help="Test operation grouping from business requirements without supplying topology")
     parser.add_argument("--verify", help="Recheck existing delegation evidence without calling a model")
     asyncio.run(main(parser.parse_args()))

@@ -169,6 +169,7 @@ model nodes perform individual transformations, extraction, drafting or analysis
 Use registered tool names and their exact input/output schemas. Never invent API capabilities, dates, secrets or successful receipts.
 When execution_feedback is present, repair the actual failed step using its errors and receipts while preserving the original objective.
 Retain completed external writes exactly; never resubmit successful writes to try again. Do not repeat an unchanged failed plan.
+Preserve the execution_feedback workflow's frozen inputs when repairing; they are part of the completed write receipts.
 If backend.terminal is available, you can implement missing local operations as explicit command steps, including scripts and checks;
 use local_execution for OS/workspace information and actual stdout/files as evidence. The built-in terminal needs no API key
 or external connection. Use payload.python for portable Python scripts (bundled interpreter), payload.command for shell,
@@ -222,9 +223,9 @@ Allowed kinds: tool, model, agent, transform, retrieve, artifact, input, approva
 Step id uses ASCII letters/digits/underscore/hyphen and begins with a letter. Each data reference must point to an ancestor
 listed in depends_on or its ancestors. Objects with $ref must contain ONLY that key. Nest them as needed in other objects.
 Reference examples: {"$ref":"search.results"}, {"$ref":"draft.text"}, {"$ref":"extract.data.items"}.
-Model input accepts capability (chat or decision), prompt (string or reference to STRING), messages, response_schema and
-max_output_tokens. For object context, use an explicit core.to_text tool step with input.value referencing the object; then reference
-its output.text in model messages. Never pass raw objects as message content or interpolate placeholder strings.
+Model input accepts capability (chat or decision), prompt (string or reference to STRING), messages, context, response_schema and
+max_output_tokens. For object context, pass input.context with references to the required data; the runtime serializes it once.
+Never pass raw objects as message content or interpolate placeholder strings. Do not add a core.to_text node just to serialize context.
 Prefer messages=[{"role":"system","content":"specific instructions"},{"role":"user","content":{"$ref":"$input.message"}}]
 for text processing; for data objects use an agent prompt reference only when it resolves to a string.
 Model output is {text,data,images,embeddings,usage}; decision data matches response_schema. Agent prompt must resolve to string.
@@ -244,6 +245,8 @@ A workflow with required_connections is a non-executable blueprint. Once access 
 clear fulfilled required_connections and validate the complete graph. Simple tasks may be one model step, but
 multi-stage requests must expose their actual stages. Include a final useful result; artifact nodes can save reusable output.
 """
+    from .workflow_planning import CONSTRUCTION_GUIDE
+    instruction += '\n' + CONSTRUCTION_GUIDE
     # Compilation and pure-code verification are durable; no business APIs run during construction.
     run_id = hub.submit(
         {
@@ -376,7 +379,13 @@ def build_status(hub, identifier, assistant):
             }
         workflow = draft.workflow
         workflow.name = assistant["name"]
-        workflow.inputs = {**workflow.inputs, "message": "", "attachment_ids": [], "attachments": []}
+        # Repairs retain their frozen input snapshot: even adding empty runtime
+        # fields invalidates the evidence used to preserve completed writes.
+        if not stored(hub, 'studio-build-feedback', identifier):
+            from .workspace_chat import input_contract
+            fields = input_contract(workflow.model_dump()).get('properties', {})
+            workflow.inputs.update({k: v for k, v in {'message': '', 'attachment_ids': [], 'attachments': []}.items()
+                                    if k in fields})
         workflow.limits = type(workflow.limits).model_validate(task_limits(identifier, assistant))
         validate_compiled(hub, workflow, build)
         # Persist exact API/extension bindings into the reusable plan, not just at first execution.

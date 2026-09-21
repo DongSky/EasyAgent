@@ -11,7 +11,7 @@ from pydantic import Field
 from .contracts import Contract, Workflow
 from .results import run_result
 from .store import Conflict, encode
-from .workspace_chat import input_contract
+from .workspace_chat import input_contract, workflow_inputs
 
 
 class WorkflowCall(Contract):
@@ -41,7 +41,7 @@ def install_workflow_calls(app, hub):
         if not old:
             saved = hub.development.get('workflow', identifier, body.revision)
             flow = saved['workflow']
-            flow['inputs'] = {**flow.get('inputs', {}), **body.inputs}
+            flow['inputs'] = workflow_inputs(flow, body.inputs)
             Draft202012Validator(input_contract(flow), format_checker=FormatChecker()).validate(flow['inputs'])
             flow.setdefault('metadata', {})['workflow_source'] = {'id': identifier, 'revision': saved['revision']}
             spec = encode(hub.prepare(flow).model_dump())

@@ -127,6 +127,8 @@ Common step types:
 
 Steps can set `max_attempts`, `timeout_seconds`, `not_before`, `requires_approval`, `when`, and `compensate`. `workflow_ref={id,revision}` references a saved version. Omitting a revision resolves/pins it during preparation rather than following later updates. See the [Workflow schema](contracts/workflow.schema.json).
 
+Model and agent steps accept `input.context`, for example `{"context":{"orders":{"$ref":"parse.data"}}}` with a declared dependency on `parse`. The runtime appends resolved data as one user message, removing the need for a serialization-only `core.to_text` step. Keep instructions in prompt/messages. Agent context remains pinned across tool turns without repeated insertion. Combine pure computations that share a retry boundary; retain separate nodes for writes, approvals and remote waiting, and run independent branches according to their actual dependencies. See the [streamlining and acceptance record (Chinese)](WORKFLOW_STREAMLINING.md).
+
 ### REST and schemas
 
 A running instance's `/openapi.json` defines endpoints/input structures; `/docs` provides interactive reference. Core paths:
@@ -136,6 +138,8 @@ A running instance's `/openapi.json` defines endpoints/input structures; `/docs`
 - `POST /v1/approvals/{id}`: `{approved}`. `POST /v1/inputs/{id}`: an object matching the pending input schema.
 - `POST /v1/reconciliations/{id}`: `{output,receipt}` for an uncertain write.
 - `/v1/tools`, `/v1/models`, `/v1/skills`: catalogs. `/v1/studio/workflows`: saved definitions.
+
+For polling, `GET /v1/runs/{id}?progress=true` retains graph structure, status, approvals, input requests, retries, usage and child runs while omitting step inputs, outputs and agent histories. The response contains `progress: true`; use the default full endpoint to inspect results.
 
 Submission accepts `Idempotency-Key`; the same key with a different definition conflicts. Public contracts reject unknown fields. Errors contain `detail`: 401/403 concern authentication/authorization, 404 missing resources, 409 revision/state conflicts, and 422 validation. Do not retry every error indiscriminately.
 

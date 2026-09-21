@@ -221,6 +221,8 @@ class Autonomy:
                      "do not inspect the application's source code to discover workflow fields. An agent step returns {text, data, "
                      "turns, tool_count}; use {$ref:'review.text'} as an artifact node's content. "
                      "When a workflow reports succeeded, still inspect its outputs: a report explaining an unmet requirement is not success.")
+        from .workflow_planning import CONSTRUCTION_GUIDE
+        lines.append(CONSTRUCTION_GUIDE)
         if state.get("request", {}).get("intent") == "create":
             lines.append("- The user selected CREATE WORKFLOW: create and save a reusable workflow, execute that saved revision "
                          "with workflows.run on the supplied input, and verify its output. A prose plan or a standalone script alone "
@@ -424,9 +426,6 @@ class Autonomy:
                 raise ValueError("id must start with a letter and use letters, digits, _ . -")
             if identifier.startswith(("assistant-", "goal_")):
                 raise PermissionError("that id prefix is reserved for compiled assistants and goal plans")
-            workflow.inputs = {**workflow.inputs, "message": workflow.inputs.get("message", ""),
-                               "attachment_ids": workflow.inputs.get("attachment_ids", []),
-                               "attachments": workflow.inputs.get("attachments", [])}
             workflow.metadata = {**workflow.metadata, "description": args.get("description") or workflow.metadata.get("description", ""),
                                  "created_by": "operator", "chat_enabled": True}
             allowed = {t["name"] for t in hub.available_tools()}
@@ -448,7 +447,10 @@ class Autonomy:
 
         async def workflows_schema(args, ctx):
             from .contracts import AgentConfig
+            from .contracts import ModelRequest
+            from .workflow_planning import CONSTRUCTION_GUIDE
             return {"workflow": Workflow.model_json_schema(), "agent_input": AgentConfig.model_json_schema(),
+                    "model_input": ModelRequest.model_json_schema(), "construction": CONSTRUCTION_GUIDE,
                     "notes": "Agent output: text (final answer), data (structured result), turns, tool_count. "
                     "An artifact step input is {name, content, media_type}. max_depth counts delegated agent generations, "
                     "not workflow nesting. A node's max_children/max_active apply to that node; RunLimits applies to the whole tree."}
@@ -464,7 +466,10 @@ class Autonomy:
                 identifier = child[0]
             else:
                 workflow = Workflow.model_validate(row["workflow"])
-                workflow.inputs.update(args.get("inputs", {}))
+                from .workspace_chat import input_contract, workflow_inputs
+                from jsonschema import Draft202012Validator, FormatChecker
+                workflow.inputs = workflow_inputs(row['workflow'], args.get('inputs', {}))
+                Draft202012Validator(input_contract(row['workflow']), format_checker=FormatChecker()).validate(workflow.inputs)
                 identifier = hub.submit(workflow, "operator-run:" + ctx.invocation_id, (ctx.run_id, ctx.step_id, slot),
                                         parent_job=ctx.job)
             run = self.store.run(identifier)

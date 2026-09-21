@@ -45,6 +45,7 @@ class ModelRegistry:
         self.bindings[alias] = ModelBinding(provider, model, set(capabilities), fallback, output_price_per_million, input_price_per_million)
 
     async def generate(self, request: ModelRequest, binding=None):
+        request = request.with_context()
         binding = binding or self.bindings.get(request.model)
         if not binding:
             raise ValueError(f"unknown model alias: {request.model}")
