@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 import json
@@ -84,8 +85,12 @@ async def test_signed_inbound_dedup_conversation_reply_approval_and_automatic_le
     for i in range(4):
         await hub.conversations.send(c["id"], {"text": str(i) + "x" * 1600})
         await settle(hub, c["id"])
-    await hub.maintenance.tick()
-    c = hub.conversations.get(c["id"])
+    # The background loop may already own this compaction. A second tick skips
+    # claimed work; returning from it does not mean the summary has been saved.
+    async with asyncio.timeout(30):
+        while not (c := hub.conversations.get(c["id"]))["summary"]:
+            await hub.maintenance.tick()
+            await asyncio.sleep(.01)
     assert c["summary"] and len(c["messages"]) == 8
 
 

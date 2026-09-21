@@ -274,23 +274,52 @@ async def test_model_continuation_uses_remaining_output_allowance_instead_of_fai
     assert run['usage']['output_reserved'] == 8 and run['spec']['limits']['output_tokens'] == 10
 
 
-async def test_default_builder_completes_past_previous_call_segment_and_output_caps(hub):
+@pytest.mark.parametrize('interrupt_response', [False, True])
+async def test_default_builder_completes_past_previous_call_segment_and_output_caps(hub, monkeypatch, interrupt_response):
+    # This large graph validates many durable bindings synchronously; use the
+    # production lease instead of the fixture's shorter lease.
+    hub.lease_seconds = 30
     calls = 0
 
     class Builder:
         async def generate(self, request, model):
             nonlocal calls
             calls += 1
-            if calls == 1:
+            if request.response_schema['title'] == 'BuildDraft':
                 raise ModelResponseError('length')
-            if calls == 2:
+            # Recovery may repeat a model request whose response was not saved.
+            # Continue from the authoritative draft, not a process-local counter.
+            draft = json.loads(request.messages[-1]['content'])['draft']
+            done = False
+            if not draft:
                 edits = [{'op': 'set', 'path': [], 'value': {
                     'workflow': {'name': 'large graph', 'steps': []}, 'explanation': 'Complete all stages'}}]
             else:
+                stage = len(draft['workflow']['steps']) + 3
                 edits = [{'op': 'append', 'path': ['workflow', 'steps'], 'value': {
-                    'id': 'stage'+str(calls), 'target': 'core.echo'}}]
-            return ModelResult(data={'edits': edits, 'done': calls == 70},
+                    'id': 'stage'+str(stage), 'target': 'core.echo'}}]
+                done = stage == 70
+            return ModelResult(data={'edits': edits, 'done': done},
                                usage={'input_tokens': 100, 'output_tokens': 3000})
+
+    interrupted = False
+    if interrupt_response:
+        generate = hub.generate
+
+        async def lose_response(job, request):
+            nonlocal interrupted
+            result = await generate(job, request)
+            if not interrupted and request.response_schema['title'] == 'BuildEdits' and any(
+                edit.get('value', {}).get('id') == 'stage3' for edit in result.data['edits']
+            ):
+                interrupted = True
+                # The response arrived, but its edit has not reached the checkpoint.
+                with hub.store.transaction() as db:
+                    db.execute('UPDATE steps SET lease_until=0 WHERE run_id=? AND id=?',
+                               (job['run_id'], job['id']))
+            return result
+
+        monkeypatch.setattr(hub, 'generate', lose_response)
 
     hub.models.register('planner', Builder(), 'fixture', ['decision'])
     body = assistant('Complete a large graph without arbitrary construction caps')
@@ -298,10 +327,13 @@ async def test_default_builder_completes_past_previous_call_segment_and_output_c
     # fixture; slow CI disks must not be mistaken for a builder-imposed cap.
     run = await hub.wait(start_build(hub, 'large-build', body)['id'], timeout=90)
     assert run['status'] == 'succeeded', run
-    assert run['usage']['model_calls'] == 70 and run['usage']['output_reserved'] > 131072
+    assert run['usage']['model_calls'] == calls >= 70 and run['usage']['output_reserved'] > 131072
     assert all(run['spec']['limits'][key] is None for key in ('model_calls', 'tool_calls', 'output_tokens', 'wall_time_seconds'))
     plan = build_status(hub, 'large-build', body)
-    assert plan['status'] == 'ready' and len(plan['workflow']['steps']) == 68
+    assert plan['status'] == 'ready', plan
+    assert [step['id'] for step in plan['workflow']['steps']] == ['stage'+str(n) for n in range(3, 71)]
+    if interrupt_response:
+        assert interrupted and run['steps'][0]['attempts'] >= 2
 
 
 async def test_unlimited_builder_remains_cancellable_without_publishing_a_draft(hub):
