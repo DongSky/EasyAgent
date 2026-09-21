@@ -5,6 +5,7 @@ import sys
 import threading
 import traceback
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import pytest
 import uvicorn
@@ -23,6 +24,15 @@ def pytest_runtest_protocol(item, nextitem):
     if os.environ.get('GITHUB_ACTIONS') == 'true':
         def expired():
             message = f'Test exceeded 120 seconds (including fixtures): {item.nodeid}'
+            # os._exit bypasses pytest's captured-output and JUnit writers. Keep
+            # the diagnosis outside capture so the next CI step can report it.
+            report = Path('.eah/ci/test-timeout.txt')
+            report.parent.mkdir(parents=True, exist_ok=True)
+            with report.open('w', encoding='utf-8') as output:
+                print(message, file=output)
+                for identifier, frame in sys._current_frames().items():
+                    print(f'Thread {identifier}:', file=output)
+                    traceback.print_stack(frame, file=output)
             print('::error::' + message, file=sys.stderr, flush=True)
             for identifier, frame in sys._current_frames().items():
                 print(f'Thread {identifier}:', file=sys.stderr)
