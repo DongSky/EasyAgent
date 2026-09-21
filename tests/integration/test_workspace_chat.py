@@ -15,8 +15,8 @@ from easyagent.models import HTTPProvider
 from easyagent.runtime import Hub
 
 
-async def settled(hub, conversation, *, status=None):
-    async with asyncio.timeout(20):
+async def settled(hub, conversation, *, status=None, timeout=20):
+    async with asyncio.timeout(timeout):
         while True:
             await hub.conversations.tick()
             current = hub.conversations.get(conversation)

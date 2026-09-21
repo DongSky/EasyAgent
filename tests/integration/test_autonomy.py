@@ -104,13 +104,15 @@ async def test_operator_builds_node_saves_workflow_remembers_and_delegates(api, 
                    'skill': {'name': 'csv-totals', 'description': 'Sum CSV amounts per customer', 'body': '1. Publish the aggregate node.\n2. Save the workflow.\n3. Verify totals.'},
                    'summary': 'built a node'}, dispatch=dispatch)
     hub.models.register('planner', model, 'fixture', ['chat', 'decision'])
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         conversation = (await client.post('/v1/conversations', json={'workspace': True, 'model': 'planner'})).json()
         path = f"/v1/conversations/{conversation['id']}/messages"
         response = await client.post(path, json={'text': 'customer,amount\nAlice,2\nAlice,3 — 按客户汇总，并保存成可复用流程',
                                                  'intent': 'create', 'execution': 'automatic'})
         assert response.status_code == 202
-        completed = await settled(hub, conversation['id'])
+        # This chain publishes code, delegates, executes a workflow, and reflects.
+        # Verify its results without turning slow CI storage into a 20-second SLA.
+        completed = await settled(hub, conversation['id'], timeout=60)
         task = completed['turns'][-1]['task']
         assert task['phase'] == 'completed', task
         assert task['engine'] == 'operator'

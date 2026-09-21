@@ -1,6 +1,7 @@
 """Protocol conformance uses real local HTTP, without charging every model in the directory."""
 import base64
 import json
+from importlib.resources import files
 import re
 
 import httpx
@@ -13,7 +14,15 @@ from easyagent.http_tools import build_http_tool
 from easyagent.tools import InvocationContext
 
 
-async def test_catalog_all_concrete_native_routes_and_upload_media(hub, monkeypatch):
+SNAPSHOT = json.loads(files('easyagent').joinpath('data/model_protocols.json').read_text(encoding='utf-8'))
+NATIVE_FAMILIES = sorted({op['family'] for op in SNAPSHOT['operations'] if '*' not in op['path']})
+
+
+@pytest.fixture
+async def native_catalog(hub, monkeypatch):
+    # These route contracts invoke handlers directly; idle workflow workers would
+    # only add database polling. The workflow approval case starts them explicitly.
+    await hub.stop()
     snapshot = hub.model_catalog.snapshot
     remote, received = FastAPI(), []
     @remote.get('/v1/models')
@@ -40,76 +49,93 @@ async def test_catalog_all_concrete_native_routes_and_upload_media(hub, monkeypa
         assert all(o['schema_status'] == 'documented' for m in catalog['models'] for o in m['operations'])
         assert 'fixture-only' not in json.dumps(catalog)
         received.clear()
-        media = hub.artifacts.put('input.wav', b'RIFF-fixture', 'audio/wav')
-        run_id = hub.submit({'name': 'Protocol fixtures', 'steps': [{'id':'receipt', 'target':'core.echo'}]})
-        concrete = [op for op in hub.model_catalog.operations.values() if '*' not in op['path']]
-        for index, op in enumerate(concrete):
-            definition, defaults, _ = hub.model_catalog.native_definition({'operation_id': op['id']})
-            args = {name: 'fixture' for name in re.findall(r'\{([^}]+)\}', op['path'])}
-            if definition.body_parameter:
-                args['body'] = {'prompt': 'protocol fixture'}
-                for key in definition.file_parameters:
-                    args['body'][key] = media['id']
-            _, handler = build_http_tool(definition)
-            output = await handler(args, InvocationContext(str(index), run_id, 'receipt', store=hub.store))
-            assert output['inline_result'] is True
-            expected_path = re.sub(r'\{[^}]+\}', 'fixture', op['path'])
-            assert received[-1][:2] == (op['method'], expected_path)
-            if definition.request_encoding == 'multipart' and definition.body_parameter:
-                assert received[-1][2].startswith('multipart/form-data; boundary=')
-                if definition.file_parameters:
-                    assert b'RIFF-fixture' in received[-1][3]
-            if op['path'] in ('/v1/images/generations','/v1/audio/speech'):
-                assert output['artifacts']
-                info, data = hub.artifacts.get(output['artifacts'][0]['id'])
-                assert data and info['media_type'] in ('image/png','audio/mpeg')
-        assert len(received) == len(concrete) and len(concrete) >= 300
-        # Select the model-specific oneOf branch before identifying binary fields.
-        # Otherwise reference images are silently sent as text artifact identifiers.
-        reference = hub.artifacts.put('reference.png', b'\x89PNG\r\n\x1a\nreference-bytes', 'image/png')
-        definition, defaults, _ = hub.model_catalog.native_definition({
-            'operation_id': 'v1.post.v1_images_edits', 'model': 'gpt-image-2.5-flare'})
-        assert 'image' in definition.file_parameters
-        assert definition.input_schema['properties']['body']['properties']['image']['format'] == 'binary'
+        yield catalog, received
+
+
+@pytest.mark.parametrize('family', NATIVE_FAMILIES)
+async def test_catalog_concrete_native_routes(hub, native_catalog, family):
+    # Keep complete route coverage within the watchdog on slower platforms.
+    _, received = native_catalog
+    media = hub.artifacts.put('input.wav', b'RIFF-fixture', 'audio/wav')
+    run_id = hub.submit({'name': 'Protocol fixtures', 'steps': [{'id':'receipt', 'target':'core.echo'}]})
+    all_concrete = [op for op in hub.model_catalog.operations.values() if '*' not in op['path']]
+    assert len(all_concrete) >= 300
+    assert {op['family'] for op in all_concrete} == set(NATIVE_FAMILIES)
+    concrete = [op for op in all_concrete if op['family'] == family]
+    assert concrete
+    for index, op in enumerate(concrete):
+        definition, defaults, _ = hub.model_catalog.native_definition({'operation_id': op['id']})
+        args = {name: 'fixture' for name in re.findall(r'\{([^}]+)\}', op['path'])}
+        if definition.body_parameter:
+            args['body'] = {'prompt': 'protocol fixture'}
+            for key in definition.file_parameters:
+                args['body'][key] = media['id']
         _, handler = build_http_tool(definition)
-        await handler({'body': {**defaults['body'], 'prompt': 'chibi', 'n': 1, 'image': reference['id']}},
-                      InvocationContext('reference-upload', run_id, 'receipt', store=hub.store))
-        assert b'filename="reference.png"' in received[-1][3]
-        assert b'reference-bytes' in received[-1][3]
-        assert reference['id'].encode() not in received[-1][3]
-        assert b'gpt-image-2.5-flare' in received[-1][3]
-        definition, defaults, _ = hub.model_catalog.native_definition({
-            'operation_id': 'seedance.post.api_v3_contents_generations_tasks', 'model': 'doubao-seedance-2-5-260628'})
-        _, handler = build_http_tool(definition)
-        arguments={'body': {**defaults['body'], 'content':[
-            {'type':'image_url','image_url':{'url':reference['id']},'role':'first_frame'}]}}
-        await handler(arguments, InvocationContext('video-reference',run_id,'receipt',store=hub.store))
-        sent=json.loads(received[-1][3])
-        data_url=sent['content'][0]['image_url']['url']
-        assert base64.b64decode(data_url.split(',',1)[1]) == b'\x89PNG\r\n\x1a\nreference-bytes'
-        assert arguments['body']['content'][0]['image_url']['url'] == reference['id']
-        # Model ids with '/' stay in the model field or an encoded path placeholder.
-        gemini = next(m for m in catalog['models'] if m['id'] == 'gemini-3.1-flash-tts-preview')
-        route = next(r for r in gemini['operations'] if r['protocol'] == 'gemini')
-        definition, defaults, _ = hub.model_catalog.native_definition({'operation_id': route['operation_id'], 'model': gemini['id']})
-        assert defaults['model'] == gemini['id']
-        assert 'key' not in definition.input_schema['properties']
-        # Native interfaces still work through normal Hub approval and persisted invocation handling.
-        row = hub.model_catalog.install_operation({'operation_id': next(o['id'] for o in concrete if o['path']=='/v1/audio/speech'),
-            'model': 'tts-1', 'defaults': {'body': {'input': 'hello', 'voice': 'alloy'}}})
-        created = hub.submit({'name': 'Native voice via workflow', 'steps': [row['step']]})
-        approval = await hub.wait(created)
-        assert approval['status'] == 'waiting_approval'
-        hub.tools.approve(hub.store, approval['approvals'][0]['id'], True)
-        result = await hub.wait(created)
-        assert result['status'] == 'succeeded', result
-        assert result['steps'][0]['output']['artifacts'][0]['media_type'] == 'audio/mpeg'
-        revised = hub.model_catalog.install_operation({'operation_id': row['operation']['id'],
-            'model': 'tts-1', 'defaults': {'body': {'input': 'updated text', 'voice': 'alloy'}}})
-        assert revised['manifest']['revision'] == row['manifest']['revision'] + 1
-        assert revised['manifest']['source']['revision'] == row['manifest']['source']['revision']
-        reused = hub.library.instantiate(revised['manifest']['id'])['step']
-        assert reused['input']['body']['input'] == 'updated text'
+        output = await handler(args, InvocationContext(str(index), run_id, 'receipt', store=hub.store))
+        assert output['inline_result'] is True
+        expected_path = re.sub(r'\{[^}]+\}', 'fixture', op['path'])
+        assert received[-1][:2] == (op['method'], expected_path)
+        if definition.request_encoding == 'multipart' and definition.body_parameter:
+            assert received[-1][2].startswith('multipart/form-data; boundary=')
+            if definition.file_parameters:
+                assert b'RIFF-fixture' in received[-1][3]
+        if op['path'] in ('/v1/images/generations','/v1/audio/speech'):
+            assert output['artifacts']
+            info, data = hub.artifacts.get(output['artifacts'][0]['id'])
+            assert data and info['media_type'] in ('image/png','audio/mpeg')
+    assert len(received) == len(concrete)
+
+
+async def test_catalog_reference_upload_media_and_installed_operation(hub, native_catalog):
+    catalog, received = native_catalog
+    run_id = hub.submit({'name': 'Media protocol fixtures', 'steps': [{'id': 'receipt', 'target': 'core.echo'}]})
+    # Select the model-specific oneOf branch before identifying binary fields.
+    # Otherwise reference images are silently sent as text artifact identifiers.
+    reference = hub.artifacts.put('reference.png', b'\x89PNG\r\n\x1a\nreference-bytes', 'image/png')
+    definition, defaults, _ = hub.model_catalog.native_definition({
+        'operation_id': 'v1.post.v1_images_edits', 'model': 'gpt-image-2.5-flare'})
+    assert 'image' in definition.file_parameters
+    assert definition.input_schema['properties']['body']['properties']['image']['format'] == 'binary'
+    _, handler = build_http_tool(definition)
+    await handler({'body': {**defaults['body'], 'prompt': 'chibi', 'n': 1, 'image': reference['id']}},
+                  InvocationContext('reference-upload', run_id, 'receipt', store=hub.store))
+    assert b'filename="reference.png"' in received[-1][3]
+    assert b'reference-bytes' in received[-1][3]
+    assert reference['id'].encode() not in received[-1][3]
+    assert b'gpt-image-2.5-flare' in received[-1][3]
+    definition, defaults, _ = hub.model_catalog.native_definition({
+        'operation_id': 'seedance.post.api_v3_contents_generations_tasks', 'model': 'doubao-seedance-2-5-260628'})
+    _, handler = build_http_tool(definition)
+    arguments={'body': {**defaults['body'], 'content':[
+        {'type':'image_url','image_url':{'url':reference['id']},'role':'first_frame'}]}}
+    await handler(arguments, InvocationContext('video-reference',run_id,'receipt',store=hub.store))
+    sent=json.loads(received[-1][3])
+    data_url=sent['content'][0]['image_url']['url']
+    assert base64.b64decode(data_url.split(',',1)[1]) == b'\x89PNG\r\n\x1a\nreference-bytes'
+    assert arguments['body']['content'][0]['image_url']['url'] == reference['id']
+    # Model ids with '/' stay in the model field or an encoded path placeholder.
+    gemini = next(m for m in catalog['models'] if m['id'] == 'gemini-3.1-flash-tts-preview')
+    route = next(r for r in gemini['operations'] if r['protocol'] == 'gemini')
+    definition, defaults, _ = hub.model_catalog.native_definition({'operation_id': route['operation_id'], 'model': gemini['id']})
+    assert defaults['model'] == gemini['id']
+    assert 'key' not in definition.input_schema['properties']
+    # Native interfaces still work through normal Hub approval and persisted invocation handling.
+    row = hub.model_catalog.install_operation({'operation_id': next(o['id'] for o in hub.model_catalog.operations.values() if o['path']=='/v1/audio/speech'),
+        'model': 'tts-1', 'defaults': {'body': {'input': 'hello', 'voice': 'alloy'}}})
+    await hub.start()
+    created = hub.submit({'name': 'Native voice via workflow', 'steps': [row['step']]})
+    approval = await hub.wait(created)
+    assert approval['status'] == 'waiting_approval'
+    hub.tools.approve(hub.store, approval['approvals'][0]['id'], True)
+    result = await hub.wait(created)
+    assert result['status'] == 'succeeded', result
+    assert result['steps'][0]['output']['artifacts'][0]['media_type'] == 'audio/mpeg'
+    revised = hub.model_catalog.install_operation({'operation_id': row['operation']['id'],
+        'model': 'tts-1', 'defaults': {'body': {'input': 'updated text', 'voice': 'alloy'}}})
+    assert revised['manifest']['revision'] == row['manifest']['revision'] + 1
+    assert revised['manifest']['source']['revision'] == row['manifest']['source']['revision']
+    reused = hub.library.instantiate(revised['manifest']['id'])['step']
+    assert reused['input']['body']['input'] == 'updated text'
 
 
 async def test_catalog_text_dialects_preserve_model_ids_and_parameters(api, monkeypatch):
