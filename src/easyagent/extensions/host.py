@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 import time
 import uuid
 
@@ -510,6 +511,14 @@ class ExtensionHost:
             elif m.runtime == "node":
                 command = ["node", m.entrypoint]
             else:
+                # MSVC's linker still rejects long output paths even when Windows
+                # long paths are enabled. Keep Cargo artifacts out of deep source
+                # directories; an explicitly granted target directory takes priority.
+                if os.name == "nt":
+                    env.setdefault(
+                        "CARGO_TARGET_DIR",
+                        str(Path(tempfile.gettempdir()) / "eah-rust" / package.digest[:32]),
+                    )
                 command = [
                     "cargo",
                     "run",

@@ -294,7 +294,9 @@ async def test_default_builder_completes_past_previous_call_segment_and_output_c
 
     hub.models.register('planner', Builder(), 'fixture', ['decision'])
     body = assistant('Complete a large graph without arbitrary construction caps')
-    run = await hub.wait(start_build(hub, 'large-build', body)['id'])
+    # Seventy durable model turns are intentionally much larger than a normal
+    # fixture; slow CI disks must not be mistaken for a builder-imposed cap.
+    run = await hub.wait(start_build(hub, 'large-build', body)['id'], timeout=90)
     assert run['status'] == 'succeeded', run
     assert run['usage']['model_calls'] == 70 and run['usage']['output_reserved'] > 131072
     assert all(run['spec']['limits'][key] is None for key in ('model_calls', 'tool_calls', 'output_tokens', 'wall_time_seconds'))
