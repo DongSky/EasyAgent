@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -25,6 +26,7 @@ class ScenarioWorld:
         self.lookups = []
         self.parallel_active = 0
         self.peak_parallel = 0
+        self.quote_barrier = asyncio.Barrier(2)
         with self.connect() as db:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS orders(id TEXT PRIMARY KEY,owner TEXT,status TEXT);
@@ -32,10 +34,15 @@ class ScenarioWorld:
                 INSERT OR IGNORE INTO orders VALUES('order-demo','customer-demo','pending');
             """)
 
+    @contextmanager
     def connect(self):
         db = sqlite3.connect(self.path)
         db.row_factory = sqlite3.Row
-        return db
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
 
     def register(self, hub):
         string = {"type": "string", "minLength": 1}
@@ -84,7 +91,8 @@ class ScenarioWorld:
             self.parallel_active += 1
             self.peak_parallel = max(self.peak_parallel, self.parallel_active)
             try:
-                await asyncio.sleep(0.05)
+                # Both quote branches must enter; elapsed time does not prove overlap.
+                await asyncio.wait_for(self.quote_barrier.wait(), 30)
                 return {"kind": args["kind"], "cents": 12000 if args["kind"] == "transport" else 8000}
             finally:
                 self.parallel_active -= 1

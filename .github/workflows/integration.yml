@@ -63,6 +63,22 @@ jobs:
                               detail = (f"{case.get('classname')}.{case.get('name')} captured logs\n" + logs[-3000:])
                               detail = detail.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
                               print(f'::error::{detail}')
-      - run: uv run --extra app python -m examples.demos.run_all
-      - run: uv run --extra app python -m examples.demos.advanced
-      - run: uv run --extra app python -m examples.demos.scenarios
+      - name: Run offline demos
+        shell: python
+        run: |
+          import os
+          import subprocess
+          import sys
+          sys.stdout.reconfigure(encoding='utf-8')
+          for module in ('examples.demos.run_all', 'examples.demos.advanced', 'examples.demos.scenarios'):
+              print(f'::group::{module}', flush=True)
+              result = subprocess.run(['uv', 'run', '--extra', 'app', 'python', '-m', module],
+                  env={**os.environ, 'PYTHONUTF8': '1'}, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                  encoding='utf-8', errors='replace')
+              print(result.stdout, flush=True)
+              print('::endgroup::', flush=True)
+              if result.returncode:
+                  detail = (module + '\n' + result.stdout[-6000:])
+                  detail = detail.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+                  print(f'::error::{detail}', flush=True)
+                  sys.exit(result.returncode)

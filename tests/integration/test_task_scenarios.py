@@ -1,5 +1,6 @@
 """Benchmark-family adaptations; assertions measure runtime behavior, not model quality."""
 import json
+import sqlite3
 
 import httpx
 import pytest
@@ -16,6 +17,22 @@ def world(hub, tmp_path):
     world = ScenarioWorld(tmp_path / "business.db")
     world.register(hub)
     return world
+
+
+def test_scenario_database_closes_after_commit_and_rollback(tmp_path):
+    world = ScenarioWorld(tmp_path / 'business.db')
+    with world.connect() as committed:
+        committed.execute("UPDATE orders SET status='shipped'")
+    with pytest.raises(sqlite3.ProgrammingError, match='closed'):
+        committed.execute('SELECT 1')
+    with pytest.raises(RuntimeError, match='rollback'):
+        with world.connect() as rolled_back:
+            rolled_back.execute("UPDATE orders SET status='cancelled'")
+            raise RuntimeError('rollback')
+    with pytest.raises(sqlite3.ProgrammingError, match='closed'):
+        rolled_back.execute('SELECT 1')
+    with world.connect() as reopened:
+        assert reopened.execute('SELECT status FROM orders').fetchone()[0] == 'shipped'
 
 
 async def test_known_time_reminders_with_source_and_artifact(hub, world):
