@@ -35,7 +35,10 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+          import sys
           import xml.etree.ElementTree as ET
+          # Windows' legacy console encoding cannot emit Chinese assertion output.
+          sys.stdout.reconfigure(encoding='utf-8')
           timeout_report = Path('.eah/ci/test-timeout.txt')
           if timeout_report.exists():
               trace = timeout_report.read_text(encoding='utf-8')
