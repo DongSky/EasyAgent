@@ -44,7 +44,7 @@ async def test_archived_api_and_subworkflow_survive_restart_and_pinned_execution
         restored = Hub(database, poll_seconds=.01)
         app = create_app(restored, manage_workers=False)
         install_studio(app, restored)
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://testserver') as client:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://testserver', timeout=30) as client:
             assert [r['id'] for r in (await client.get('/v1/studio/workflows')).json()] == ['useful.flow']
             assert [r['id'] for r in restored.chat.public_catalog()] == ['useful.flow']
             for endpoint in ['/v1/studio/apis', '/v1/library', '/v1/library/sources', '/v1/tools']:

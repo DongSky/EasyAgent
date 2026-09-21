@@ -45,7 +45,7 @@ def provider_fixture(*, writer_started=None, release_writer=None, empty=False):
         assert brief['source_snippets'][0]['url'] == 'https://example.test/character'
         if writer_started:
             writer_started.set()
-            await asyncio.wait_for(release_writer.wait(), 10)
+            await asyncio.wait_for(release_writer.wait(), 30)
         return {'choices':[{'message':{'content':'Watercolor portrait, green jacket, hat, waving.'}}]}
 
     @app.post('/v1/images/edits')
@@ -88,14 +88,14 @@ async def test_research_image_multiple_inputs_concurrent_fork_join_approval_rest
     database = tmp_path/'run.db'
     async with live_server(remote) as endpoint:
         config = config_file(tmp_path, endpoint)
-        async with Runtime(database, config=config, timeout=20) as runtime:
+        async with Runtime(database, config=config, timeout=30) as runtime:
             reference = runtime.hub.artifacts.put('reference.png', PNG, 'image/png')
             task = asyncio.create_task(runtime.arun(ResearchImage(), keywords='reference character',
                 reference_image=reference['id'], style='watercolor', size='1536x1024'))
             try:
-                await asyncio.wait_for(started.wait(), 5)
+                await asyncio.wait_for(started.wait(), 30)
                 # The writer is blocked by a gate; the other branch must still save its result.
-                async with asyncio.timeout(10):
+                async with asyncio.timeout(30):
                     while not (run := runtime.hub.store.runs()) or not any(
                         a['name']=='sources.md' for a in runtime.hub.artifacts.list(run[0]['id'])
                     ) or runtime.hub.store.run(run[0]['id'])['steps'][6]['status'] != 'succeeded':

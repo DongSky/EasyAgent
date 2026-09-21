@@ -129,7 +129,7 @@ async def test_management_versions_pin_paused_run_across_restart(api):
     @remote.post('/evaluate')
     async def evaluate(request: Request):
         return {'version': 'v2' if request.query_params else 'v1'}
-    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url, timeout=30) as client:
         body = definition(origin+'/evaluate')
         added = await client.post('/v1/studio/apis', json=body)
         assert added.status_code == 201
@@ -186,7 +186,7 @@ async def test_agent_child_input_restart_and_write_approval(tmp_path):
         await hub.stop()
         fresh = Hub(hub.store.path, concurrency=1, poll_seconds=.01, lease_seconds=5)
         fresh.models.register('author', AuthorModel(actions), 'fixture', ['chat'])
-        async with live_server(create_app(fresh)) as server, httpx.AsyncClient(base_url=server) as client:
+        async with live_server(create_app(fresh)) as server, httpx.AsyncClient(base_url=server, timeout=30) as client:
             response = await client.post('/v1/inputs/'+paused['input_requests'][0]['id'], json={'text': 'authorized'})
             assert response.status_code == 200
             approval = await fresh.wait(identifier)

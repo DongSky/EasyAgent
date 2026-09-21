@@ -15,7 +15,7 @@ from easyagent.models import HTTPProvider
 from easyagent.runtime import Hub
 
 
-async def settled(hub, conversation, *, status=None, timeout=20):
+async def settled(hub, conversation, *, status=None, timeout=30):
     async with asyncio.timeout(timeout):
         while True:
             await hub.conversations.tick()
@@ -80,7 +80,7 @@ async def test_router_sees_nested_pinned_tools_and_shared_input_wiring(api):
                 'inputs': {}, 'message': '使用已配置的子流程节点。'}
 
     remote, calls = provider_app(route)
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         hub.models.register('router', HTTPProvider(endpoint), 'fixture', ['decision'])
         conversation = (await client.post('/v1/conversations', json={'workspace': True, 'model': 'router'})).json()
         response = await client.post(f"/v1/conversations/{conversation['id']}/messages", json={
@@ -107,14 +107,14 @@ async def test_match_attachments_pinned_version_idempotency_and_restore(api):
                 'inputs': {'reference_artifact': context['attachments'][0]['id']}, 'message': '使用通知整理流程。'}
 
     remote, calls = provider_app(route)
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         hub.models.register('route-fixture', HTTPProvider(endpoint, ''), 'fixture', ['chat', 'decision'])
         upload = (await client.post('/v1/artifacts/upload?name=notice.txt', content='周五下午三点前提交回执。'.encode(), headers={'Content-Type': 'text/plain'})).json()
         c = (await client.post('/v1/conversations', json={'workspace': True, 'title': '整理通知'})).json()
         payload = {'text': '整理这份通知', 'attachments': [upload['id']], 'idempotency_key': 'one-request'}
         sent = await client.post(f"/v1/conversations/{c['id']}/messages", json=payload)
         assert sent.status_code == 202, sent.text
-        await asyncio.wait_for(entered.wait(), 5)
+        await asyncio.wait_for(entered.wait(), 30)
         altered = document_flow()
         altered['steps'][-1]['input']['content'] = 'NEW VERSION MUST NOT RUN'
         hub.development.save_workflow('notice', altered, first['revision'])
@@ -144,7 +144,7 @@ async def test_ambiguous_match_clarifies_and_explicit_choice_still_requires_inpu
         return {'action': 'use', 'candidate': context['catalog'][0]['key'], 'confidence': .2, 'message': '你是想整理通知吗？'}
 
     remote, _ = provider_app(route)
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         hub.models.register('router', HTTPProvider(endpoint, ''), 'fixture', ['decision', 'chat'])
         c = (await client.post('/v1/conversations', json={'workspace': True})).json()
         await client.post(f"/v1/conversations/{c['id']}/messages", json={'text': '帮我处理一下'})
@@ -170,7 +170,7 @@ async def test_zero_code_build_save_run_and_reuse_with_document(api):
 
     remote, calls = provider_app(route, flow)
     hub.autonomy.configure({'engine': 'compile'})  # This fixture speaks the BuildDraft compiler protocol.
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         hub.models.register('planner', HTTPProvider(endpoint, ''), 'fixture', ['decision', 'chat'])
         upload = (await client.post('/v1/artifacts/upload?name=meeting.md', content=b'# Meeting\nBring the signed form.', headers={'Content-Type': 'text/markdown'})).json()
         c = (await client.post('/v1/conversations', json={'workspace': True})).json()
@@ -248,7 +248,7 @@ async def test_oversized_dispatch_context_clarifies_before_model_call(api):
         raise AssertionError('Oversized routing must not call the provider')
 
     remote, calls = provider_app(unexpected)
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         hub.models.register('router', HTTPProvider(endpoint, ''), 'fixture', ['decision', 'chat'])
         conversation = (await client.post('/v1/conversations', json={'workspace': True})).json()
         await client.post(f"/v1/conversations/{conversation['id']}/messages", json={'text': '整理通知'})

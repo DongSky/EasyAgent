@@ -44,7 +44,7 @@ def model_server():
 async def test_edit_discover_default_delete_and_restart(api):
     url, hub = api
     remote, calls = model_server()
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         body = {'alias': 'first', 'base_url': endpoint, 'model': 'alpha', 'api_key': 'fixture-value'}
         assert (await client.post('/v1/studio/connections', json=body)).status_code == 200
         assert (await client.post('/v1/studio/connections', json={**body, 'alias': 'second', 'model': 'beta'})).status_code == 200
@@ -88,7 +88,7 @@ async def test_edit_discover_default_delete_and_restart(api):
 async def test_connection_in_use_cannot_be_changed_and_workspace_checks_capability(api):
     url, hub = api
     remote, _ = model_server()
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         body = {'alias': 'working', 'base_url': endpoint, 'model': 'alpha'}
         await client.post('/v1/studio/connections', json=body)
         run = hub.submit({'name': 'pending', 'steps': [
@@ -107,7 +107,7 @@ async def test_connection_in_use_cannot_be_changed_and_workspace_checks_capabili
 async def test_deleted_media_adapters_revoke_old_versions_even_after_recreation(api):
     url, hub = api
     remote, _ = model_server()
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         body = {'alias': 'pictures', 'base_url': endpoint, 'model': 'gpt-image-2',
                 'capabilities': ['image'], 'api_key': 'fixture-value'}
         await client.post('/v1/studio/connections', json=body)
@@ -164,7 +164,7 @@ async def test_browser_manage_models_and_select_chat_and_builder(api):
             delay_refresh = True
             await page.locator('#saveConnection').click()
             await expect(page.locator('#connectionDialog')).not_to_be_visible()
-            await asyncio.wait_for(refresh_entered.wait(), 5)
+            await asyncio.wait_for(refresh_entered.wait(), 30)
             row = page.locator('[data-model-row=first]')
             await expect(row).to_contain_text('alpha')
             await row.locator('[data-edit-model]').click()
@@ -175,7 +175,7 @@ async def test_browser_manage_models_and_select_chat_and_builder(api):
             await page.locator('#saveConnectionOnly').click()
             await expect(row).to_contain_text('beta')
             assert hub.models.bindings['first'].provider.api_key == 'fixture-value'
-            async with httpx.AsyncClient(base_url=url) as client:
+            async with httpx.AsyncClient(base_url=url, timeout=30) as client:
                 await client.post('/v1/studio/connections', json={'alias': 'second', 'base_url': endpoint, 'model': 'alpha'})
             await page.locator('[data-refresh]').first.click()
             await page.locator('[data-default-model]').select_option('second')
@@ -186,7 +186,7 @@ async def test_browser_manage_models_and_select_chat_and_builder(api):
             await select.select_option('first')
             await page.locator('#workspaceMessage').fill('你好')
             await page.locator('#conversations [data-send]').click()
-            await expect(page.locator('.chat-result-message')).to_contain_text('回答来自 beta', timeout=20000)
+            await expect(page.locator('.chat-result-message')).to_contain_text('回答来自 beta', timeout=30000)
             assert hub.conversations.list()[0]['model'] == 'first'
             if os.environ.get('EAH_UI_EVIDENCE'):
                 evidence = Path(os.environ['EAH_UI_EVIDENCE'])
@@ -200,7 +200,7 @@ async def test_browser_manage_models_and_select_chat_and_builder(api):
             await select.select_option('second')
             await page.locator('#workspaceMessage').fill('再回答一次')
             await page.locator('#conversations [data-send]').click()
-            await expect(page.locator('.chat-result-message').last).to_contain_text('回答来自 alpha', timeout=20000)
+            await expect(page.locator('.chat-result-message').last).to_contain_text('回答来自 alpha', timeout=30000)
             await page.reload()
             await expect(select).to_have_value('second')
             await page.goto(url+'/#create')
@@ -208,7 +208,7 @@ async def test_browser_manage_models_and_select_chat_and_builder(api):
             await page.locator('#assistantName').fill('保存文本')
             await page.locator('#purpose').fill('将输入保存成文本文件')
             await page.locator('#buildAssistant').click()
-            await expect(page.locator('#savedLabel')).to_have_text('工作流已生成并保存', timeout=20000)
+            await expect(page.locator('#savedLabel')).to_have_text('工作流已生成并保存', timeout=30000)
             assert hub.store.memory_search('studio-assistants')[0]['value']['model'] == 'first'
             assert calls[-1][0] == 'beta'
             await page.goto(url+'/#connections')
@@ -240,12 +240,12 @@ async def test_test_and_save_cannot_restore_a_deleted_connection(api):
         await release.wait()
         return {'choices': [{'message': {'content': 'ok'}}]}
 
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         body = {'alias': 'changing', 'base_url': endpoint, 'model': 'alpha'}
         await client.post('/v1/studio/connections', json=body)
         pending = asyncio.create_task(client.put('/v1/studio/connections/changing?test=true', json=body))
         try:
-            await asyncio.wait_for(entered.wait(), 5)
+            await asyncio.wait_for(entered.wait(), 30)
             assert (await client.delete('/v1/studio/connections/changing')).status_code == 200
         finally:
             release.set()

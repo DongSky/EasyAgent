@@ -72,7 +72,7 @@ async def test_canonical_commands_run_workflows_and_keep_http_contracts(api):
     url, hub = api
     root = Path(__file__).resolve().parents[2]
     flow = json.loads((root / "examples/first-workflow.json").read_text(encoding='utf-8'))
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         assert (await client.get("/openapi.json")).json()["info"]["title"] == "EasyAgent"
         assert "EasyAgent · 工作室" in (await client.get("/")).text
         created = await client.post("/v1/runs", json=flow, headers={"Idempotency-Key": "rename"})

@@ -158,10 +158,10 @@ async def test_cli_failed_and_timeout_exit_codes(tmp_path):
 async def test_independent_app_api_auth_upload_and_stream(hub):
     service = create_app(hub, token="fixture-token", manage_workers=False)
     async with live_server(service) as backend:
-        async with httpx.AsyncClient(base_url=backend) as direct:
+        async with httpx.AsyncClient(base_url=backend, timeout=30) as direct:
             assert (await direct.get("/")).status_code == 404
             assert (await direct.get("/assets/studio.js")).status_code == 404
-        async with live_server(create_frontend(backend)) as url, httpx.AsyncClient(base_url=url) as client:
+        async with live_server(create_frontend(backend)) as url, httpx.AsyncClient(base_url=url, timeout=30) as client:
             assert "EasyAgent" in (await client.get("/")).text
             assert (await client.get("/assets/studio.js")).status_code == 200
             assert (await client.get("/v1/models")).status_code == 401

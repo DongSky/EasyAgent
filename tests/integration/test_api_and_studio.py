@@ -96,7 +96,7 @@ async def test_studio_no_code_low_code_export_and_auth(hub):
 
 async def test_studio_validation_budget_export_and_chunked_request_limit(api):
     url, hub = api
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         body = {"name": "bounded assistant", "purpose": "echo", "limits": {"model_calls": 1}}
         saved = (await client.post("/v1/studio/assistants", json=body)).json()
         path = f"/v1/studio/assistants/{saved['id']}"
@@ -129,7 +129,7 @@ async def test_reconcile_uncertain_effect_requires_atomic_receipt(api):
     identifier = hub.submit({"name": "reconcile via API", "steps": [{"id": "write", "target": "receipt.write"}]})
     pending = await hub.wait(identifier)
     invocation = pending["approvals"][0]["id"]
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         await client.post("/v1/approvals/"+invocation, json={"approved": True})
         assert (await hub.wait(identifier))["status"] == "needs_attention"
         path = "/v1/reconciliations/"+invocation
@@ -148,7 +148,7 @@ async def test_memory_selection_merge_history_and_stale_edit_over_http(api):
     from easyagent.components import digest
 
     url, hub = api
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         for key, value in {"time": "下午", "place": {"city": "香港", "floor": 2}}.items():
             response = await client.put(f"/v1/memory/ui-test/{key}", json={"value": value, "source": "用户确认"})
             assert response.status_code == 200
@@ -177,7 +177,7 @@ async def test_task_search_and_status_filter_apply_before_recent_limit(api):
     await hub.wait(older)
     newer = hub.submit({"name": "Newer unrelated", "steps": [{"id": "echo", "target": "core.echo"}]})
     await hub.wait(newer)
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         recent = (await client.get("/v1/runs?limit=1")).json()
         assert recent[0]["id"] == newer
         found = (await client.get("/v1/runs", params={"limit": 1, "query": "ui acceptance", "status": "succeeded"})).json()

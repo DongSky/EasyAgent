@@ -23,7 +23,7 @@ async def approve(hub, run):
 
 async def test_default_media_catalog_is_clean_unconnected_and_browser_binds(api):
     url, hub = api
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         rows = (await client.get('/v1/library')).json()
         default = [row for row in rows if row.get('builtin_media')]
         assert {row['id'] for row in default} == set(definitions())
@@ -101,7 +101,7 @@ async def test_image_generation_edit_upload_and_video_poll_survive_restart(api):
         return {'id': identifier, 'status': 'succeeded' if ready else 'pending',
                 **({'content': {'video_url': 'https://example.com/result.mp4'}} if ready else {})}
 
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         await client.post('/v1/studio/connections', json={'alias': 'media', 'base_url': endpoint+'/v1',
                           'model': 'image-fixture', 'capabilities': ['image'], 'api_key': 'synthetic-media-fixture'})
         for identifier in definitions():
@@ -134,7 +134,7 @@ async def test_image_generation_edit_upload_and_video_poll_survive_restart(api):
         run_id = hub.submit({'name': 'animate', 'steps': [upload_step, submit_step, wait_step]})
         await approve(hub, run_id)
         await approve(hub, run_id)
-        async with asyncio.timeout(10):
+        async with asyncio.timeout(30):
             while hub.store.run(run_id)['steps'][2]['status'] != 'waiting_remote':
                 await asyncio.sleep(.02)
         await hub.stop()
@@ -156,7 +156,7 @@ async def test_image_generation_edit_upload_and_video_poll_survive_restart(api):
 
 async def test_binding_reuse_revocation_and_export_never_include_key(api):
     url, hub = api
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         connection = {'alias': 'media', 'base_url': 'http://127.0.0.1:1/v1', 'model': 'test-image',
                       'capabilities': ['image'], 'api_key': 'synthetic-media-fixture'}
         await client.post('/v1/studio/connections', json=connection)
@@ -194,7 +194,7 @@ async def test_media_union_checks_literals_and_allows_symbolic_links():
 
 async def test_video_rebind_keeps_wait_on_same_connection(api):
     url, hub = api
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         for alias, port in [('first', 1), ('second', 2)]:
             response = await client.post('/v1/studio/connections', json={'alias': alias,
                 'base_url': f'http://127.0.0.1:{port}/v1', 'model': 'video-fixture', 'capabilities': ['chat']})
@@ -229,7 +229,7 @@ async def test_large_original_upload_and_preflight_failure_are_distinct_from_unc
             return JSONResponse({'error': {'message': 'request too large'}}, status_code=413)
         return {'data': [{'url': 'https://example.com/edited.png'}]}
 
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         await client.post('/v1/studio/connections', json={'alias': 'large-image', 'base_url': endpoint+'/v1',
                           'model': 'image-fixture', 'capabilities': ['image']})
         hub.library.install('library.media.image_edit', {'connection': 'large-image'})

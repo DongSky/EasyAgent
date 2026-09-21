@@ -93,7 +93,7 @@ async def test_compiler_keeps_correction_context_across_restart(hub):
     hub.models.register('planner', model, 'fixture', ['decision'])
     body = assistant('重启后继续纠正规划。')
     identifier = start_build(hub, 'durable-repair', body)['id']
-    await asyncio.wait_for(entered.wait(), 5)
+    await asyncio.wait_for(entered.wait(), 30)
     await hub.stop()
     restored = Hub(hub.store.path, poll_seconds=.01)
     restored.models.register('planner', model, 'fixture', ['decision'])

@@ -34,7 +34,7 @@ async def test_export_import_dependency_bundle_across_clean_hubs(api, tmp_path, 
         return {'model':'fixture', 'usage':{}, 'answers':{'result':{
             'type':'choice','choice':'yes','confidence':.9,'probabilities':{'yes':.9,'no':.1}}}}
     monkeypatch.setenv('TYPESAFE_API_KEY','source-secret')
-    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url, timeout=30) as client:
         source.library.install('library.typesafe.evaluate', {'endpoint':origin+'/classify'})
         response = await client.get('/v1/library/library.decision.classify_receipt/package')
         assert response.status_code == 200, response.text
@@ -47,7 +47,7 @@ async def test_export_import_dependency_bundle_across_clean_hubs(api, tmp_path, 
         monkeypatch.delenv('TYPESAFE_API_KEY')
         monkeypatch.setenv('MY_DECISION_KEY','destination-secret')
         request = {'package':package,'credential_bindings':{'TYPESAFE_API_KEY':'MY_DECISION_KEY'}}
-        async with live_server(app) as target_url, httpx.AsyncClient(base_url=target_url) as destination:
+        async with live_server(app) as target_url, httpx.AsyncClient(base_url=target_url, timeout=30) as destination:
             preview = await destination.post('/v1/library/packages/preview',json=request)
             assert preview.status_code == 200, preview.text
             assert preview.json()['execution_started'] is False and not requests

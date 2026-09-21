@@ -27,7 +27,7 @@ def schema(properties, required=None):
             "additionalProperties": False}
 
 
-async def until(hub, run_id, predicate, timeout=10):
+async def until(hub, run_id, predicate, timeout=30):
     async with asyncio.timeout(timeout):
         while True:
             run = hub.store.run(run_id)

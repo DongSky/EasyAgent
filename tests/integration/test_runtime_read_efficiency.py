@@ -16,7 +16,7 @@ async def test_progress_preserves_graph_retry_and_approvals_without_payload(api)
                    'depends_on': ['prepare'], 'input': {'payload': 'y' * 200000}}]})
     full = await hub.wait(rid)
     assert full['status'] == 'waiting_approval'
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         progress = (await client.get(f'/v1/runs/{rid}?progress=true')).json()
         complete = (await client.get(f'/v1/runs/{rid}')).json()
     assert complete == hub.store.run(rid)

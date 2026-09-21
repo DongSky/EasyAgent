@@ -92,7 +92,7 @@ async def test_local_runtime_only_claims_selected_tree_and_skips_global_services
 
 async def test_library_node_is_one_step_and_packaged_without_workflow(api, tmp_path):
     url, hub = api
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         initial = (await client.get('/v1/library')).json()
         assert next(r for r in initial if r['id']=='library.json.receipt')['component_type'] == 'node'
         item = (await client.post('/v1/library/library.json.receipt/instantiate', json={
@@ -121,7 +121,7 @@ async def test_save_publish_node_validation_versioning_and_symbolic_inputs(api):
     url, hub = api
     definition = {'step':{'id':'clean', 'kind':'transform', 'input':{'name':{'$ref':'$input.person.name'}}},
                   'input_schema':{'type':'object', 'properties':{'person':{'type':'object'}}, 'required':['person']}}
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         saved = await client.post('/v1/library/nodes', json={'id':'example.clean', 'definition':definition})
         assert saved.status_code == 201, saved.text
         published = await client.post('/v1/library/publish', json={'id':'example.clean', 'kind':'node',

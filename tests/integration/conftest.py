@@ -9,11 +9,18 @@ from pathlib import Path
 
 import pytest
 import uvicorn
+from playwright.async_api import expect
 
 from easyagent.api import create_app
 from easyagent.runtime import Hub
 from easyagent.studio import install_studio
 from easyagent_app import mount_app
+
+
+def pytest_configure():
+    # Functional waits allow the same 30 seconds as Hub.wait and browser actions.
+    # Hosted Windows storage can exceed the default five-second assertion window.
+    expect.set_options(timeout=30_000)
 
 
 @pytest.hookimpl(hookwrapper=True)

@@ -128,7 +128,7 @@ async def test_read_batches_overlap_but_mutations_are_ordered_barriers(hub):
         started.append(args["n"])
         if len(started) == 2:
             gate.set()
-        await asyncio.wait_for(gate.wait(), 2)
+        await asyncio.wait_for(gate.wait(), 30)
         return {"n": args["n"]}
 
     async def write(args, ctx):
@@ -146,7 +146,10 @@ async def test_read_batches_overlap_but_mutations_are_ordered_barriers(hub):
             if not any(m["role"] == "tool" for m in request.messages):
                 return ModelResult(tool_calls=[ToolCall(id=str(i), name=name, arguments={"n": n}) for i, (name, n) in enumerate(
                     [("fixture.read", 1), ("fixture.read", 2), ("fixture.write", 1), ("fixture.write", 2)])])
-            assert [m["tool_call_id"] for m in request.messages if m["role"] == "tool"] == ["0", "1", "2", "3"]
+            observations = [m for m in request.messages if m["role"] == "tool"]
+            assert [m["tool_call_id"] for m in observations] == ["0", "1", "2", "3"]
+            # A timed-out read must not pass merely because it kept its call ID.
+            assert [json.loads(m["content"]) for m in observations] == [{"n": 1}, {"n": 2}, {"n": 1}, {"n": 2}]
             return ModelResult(text="done")
 
     hub.models.register("batch", Model(), "fixture", ["chat"])
@@ -187,8 +190,8 @@ async def test_pending_batch_survives_restart_without_replaying_success(tmp_path
     identifier = first.submit({"name": "restart", "steps": [{"id": "agent", "kind": "agent", "target": "fixture",
                                 "input": {"prompt": "act", "tools": ["fixture.fast", "fixture.slow"]}}]})
     try:
-        await asyncio.wait_for(started.wait(), 10)
-        async with asyncio.timeout(10):
+        await asyncio.wait_for(started.wait(), 30)
+        async with asyncio.timeout(30):
             while "observation" not in first.store.run(identifier)["steps"][0]["state"]["pending"][0]:
                 await asyncio.sleep(.01)
     finally:

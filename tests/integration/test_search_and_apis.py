@@ -28,7 +28,7 @@ async def test_tinyfish_all_three_modes_and_restart_config(api, tmp_path, monkey
         assert request.headers["X-API-Key"] == "synthetic-key"
         calls.append(dict(request.query_params))
         return search_response(request.query_params["query"], int(request.query_params["page"]))
-    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url, timeout=30) as client:
         connection = {"endpoint": origin, "api_key": "synthetic-key"}
         response = await client.post("/v1/studio/search/tinyfish", json=connection)
         assert response.status_code == 201, response.text
@@ -76,7 +76,7 @@ async def test_tinyfish_invalid_filters_do_not_send_http(api):
     async def search(request: Request):
         calls.append(request.url)
         return search_response("invalid")
-    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url, timeout=30) as client:
         assert (await client.post("/v1/studio/search/tinyfish", json={"endpoint": origin, "api_key": "fixture"})).status_code == 201
         for invalid in [{"location": "Hong Kong"}, {"after_date": "2026-02-30"}, {"recency_minutes": 10, "before_date": "2026-01-01"},
                         {"after_date": "2026-02-01", "before_date": "2026-01-01"}, {"pub_year_min": 2026},
@@ -95,7 +95,7 @@ async def test_saved_search_keys_replace_environment_survive_restart_and_stay_pr
         keys.append(request.headers['X-API-Key'])
         return search_response(request.query_params['query'])
     monkeypatch.setenv('TINYFISH_API_KEY', 'environment-fixture')
-    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url, timeout=30) as client:
         register_tinyfish(hub, {'endpoint': origin})
         initial = (await client.get('/v1/studio/search/tinyfish')).json()
         assert initial['credential_source'] == 'environment' and initial['active']
@@ -169,7 +169,7 @@ async def test_search_errors_limits_and_retry_keep_key_private(api):
         if q == "redirect":
             return RedirectResponse("/elsewhere")
         return search_response(q)
-    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url, timeout=30) as client:
         await client.post("/v1/studio/search/tinyfish", json={"endpoint": origin, "api_key": "secret-fixture-key", "timeout_seconds": 5})
         for q in ["retry", "401", "big", "json", "shape", "slow", "redirect"]:
             if q in ('slow', 'redirect'):
@@ -193,7 +193,7 @@ async def test_custom_http_mixed_parameters_form_text_and_post_read(api):
         assert parse_qs((await request.body()).decode()) == {"query": ["hello world"]}
         calls.append(request.headers["Idempotency-Key"])
         return PlainTextResponse("synthetic result")
-    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url, timeout=30) as client:
         definition = {"name": "custom.search", "description": "POST search is read-only", "url": origin + "/items/{id}/copy/{id}?fixed=1",
             "method": "POST", "effect": "read", "request_encoding": "form", "response_mode": "text",
             "auth_location": "query", "auth_header": "access_token", "auth_prefix": "", "api_key": "synthetic",
@@ -235,7 +235,7 @@ async def test_openapi_preview_selected_import_approval_and_atomic_failure(api):
         assert request.headers["X-Key"] == "fixture-token"
         writes.append(await request.json())
         return {"receipt": "synthetic-order-1"}
-    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url, timeout=30) as client:
         body = {"document": openapi_document(origin), "prefix": "shop", "api_key": "fixture-token"}
         preview = (await client.post("/v1/studio/apis/openapi/preview", json=body)).json()
         assert [o["id"] for o in preview["operations"]] == ["lookup", "order"]

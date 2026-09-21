@@ -22,7 +22,7 @@ async def test_preconfigured_http_api_visual_flow_save_run_and_confirmation(api)
         body = await request.json()
         writes.append((body, request.headers["Idempotency-Key"]))
         return {"receipt": "synthetic-ordered", **body}
-    async with live_server(remote) as remote_url, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as remote_url, httpx.AsyncClient(base_url=url, timeout=30) as client:
         lookup = {"name": "catalog.inventory", "description": "Read product availability", "url": remote_url+"/inventory/{product}",
             "api_key": "fixture-api-key", "input_schema": {"type": "object", "properties": {"product": {"type": "string"}}, "required": ["product"], "additionalProperties": False},
             "output_schema": {"type": "object", "properties": {"product": {"type": "string"}, "available": {"type": "integer"}}, "required": ["product", "available"]}}
@@ -57,7 +57,7 @@ async def test_preconfigured_http_api_visual_flow_save_run_and_confirmation(api)
 
 async def test_visual_validation_rejects_missing_fields_cycles_and_no_code_edit_runs(api):
     url, hub = api
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         missing = {"name": "invalid before execution", "steps": [{"id": "search", "target": "memory.search", "input": {}}]}
         assert (await client.post("/v1/studio/workflows/validate", json=missing)).status_code == 422
         cycle = {"name": "invalid wire", "steps": [{"id": "a", "target": "core.echo", "depends_on": ["b"]}, {"id": "b", "target": "core.echo", "depends_on": ["a"]}]}

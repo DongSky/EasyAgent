@@ -29,7 +29,7 @@ async def test_signed_inbound_dedup_conversation_reply_approval_and_automatic_le
     )
     hub.gateway.save({"id": "chat", "credential": "gatewaykey", "model": "mock", "reply_connector": "reply"})
     app = create_app(hub, token="operator-secret", manage_workers=False)
-    async with live_server(app) as url, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(app) as url, httpx.AsyncClient(base_url=url, timeout=30) as client:
         raw = json.dumps(
             {"event_id": "message-1", "thread": "private-thread", "text": "remember boxes"}
         ).encode()

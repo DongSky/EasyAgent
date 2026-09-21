@@ -25,7 +25,7 @@ def guide(revision=1):
 
 async def test_extension_install_hooks_command_state_versions_restart(api, tmp_path):
     url, hub = api
-    async with httpx.AsyncClient(base_url=url) as c:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as c:
         p = guide()
         r = await c.post("/v1/extensions/install", json={"package": p.model_dump()})
         assert r.status_code == 201, r.text

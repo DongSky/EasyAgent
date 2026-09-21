@@ -66,7 +66,7 @@ async def test_share_complete_agent_workflow_js_import_clean_hub_and_restart(api
 
     monkeypatch.setenv("SHARE_SOURCE_KEY", "source-secret")
     monkeypatch.setenv("SHARE_TARGET_KEY", "target-secret")
-    async with live_server(remote) as base, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as base, httpx.AsyncClient(base_url=url, timeout=30) as client:
         source.models.register(
             "source-model", HTTPProvider(base, "source-model-key"), "fixture-model", ["chat"]
         )
@@ -187,7 +187,7 @@ async def test_share_complete_agent_workflow_js_import_clean_hub_and_restart(api
         install_studio(app, target)
         package_file = tmp_path / "workflow.json"
         package_file.write_text(json.dumps(package), encoding='utf-8')
-        async with live_server(app) as target_url, httpx.AsyncClient(base_url=target_url) as dest:
+        async with live_server(app) as target_url, httpx.AsyncClient(base_url=target_url, timeout=30) as dest:
             initial = await dest.post("/v1/workflow-packages/preview", json={"package": package})
             assert initial.status_code == 200 and not initial.json()["ready"]
             assert not calls

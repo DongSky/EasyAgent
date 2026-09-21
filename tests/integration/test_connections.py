@@ -21,7 +21,7 @@ async def test_connector_approval_vault_version_retry_receipt_and_restart(api, t
         calls.append((path, dict(request.headers), await request.body()))
         return Response(status_code=503 if len(calls) == 1 else 201, headers={"ETag": "receipt-1"})
 
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         assert (
             await client.put("/v1/connections/credentials/testkey", json={"value": "secret-value-123"})
         ).status_code == 200
@@ -46,7 +46,7 @@ async def test_connector_approval_vault_version_retry_receipt_and_restart(api, t
         hub.tools.approve(hub.store, run["approvals"][0]["id"], True)
         run = await hub.wait(run["id"])
         assert run["status"] == "succeeded"
-        async with asyncio.timeout(10):
+        async with asyncio.timeout(30):
             while (
                 not hub.connections.deliveries() or hub.connections.deliveries()[0]["status"] != "delivered"
             ):
@@ -96,7 +96,7 @@ async def test_calendar_utc_and_cron_dst_recovery(hub):
         )
         hub.tools.approve(hub.store, r["approvals"][0]["id"], True)
         await hub.wait(r["id"])
-        async with asyncio.timeout(5):
+        async with asyncio.timeout(30):
             while not bodies:
                 await asyncio.sleep(0.02)
         assert b"DTSTART:20260921T020000Z" in bodies[0]

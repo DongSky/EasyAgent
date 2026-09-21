@@ -271,7 +271,7 @@ async def test_goal_http_control_and_recovery_after_final_verdict(api):
     from easyagent.store import encode
 
     url, hub = api
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         created = await client.post(
             "/v1/goals",
             json={

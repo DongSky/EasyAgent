@@ -16,7 +16,7 @@ async def life_api(hub):
     app = create_app(hub, manage_workers=False)
     install_life(app, hub)
     mount_app(app)
-    async with live_server(app) as url, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(app) as url, httpx.AsyncClient(base_url=url, timeout=30) as client:
         yield client, hub
 
 

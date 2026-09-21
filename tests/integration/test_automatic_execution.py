@@ -133,7 +133,7 @@ async def test_generic_uncertain_write_is_never_silently_resubmitted(api):
     hub.tools.register(ToolSpec(name='test.write', effect='write', idempotent=False), write)
     run = await hub.wait(hub.submit({'name': 'external write', 'steps': [{'id': 'write', 'target': 'test.write'}]}, execution='automatic'))
     assert run['status'] == 'needs_attention'
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         r = await client.post('/v1/runs/'+run['id']+'/continue-automatically', json={'expected_updated': run['updated']})
         assert r.status_code == 409
     assert len(calls) == 1 and hub.store.run(run['id'])['status'] == 'needs_attention'
@@ -168,7 +168,7 @@ async def test_chat_defaults_to_automatic_python_execution_in_browser(api, tmp_p
             await page.locator('[data-destination]').select_option('create')
             await page.locator('#conversations [data-text]').fill('使用 Python 生成答案文件')
             await page.locator('#conversations [data-send]').click()
-            await expect(page.locator('.chat-task-heading')).to_contain_text('处理完成', timeout=10000)
+            await expect(page.locator('.chat-task-heading')).to_contain_text('处理完成', timeout=30000)
             assert (tmp_path/'result.txt').read_text() == '42'
             assert builder.calls == 2
             with hub.store.connect() as db:

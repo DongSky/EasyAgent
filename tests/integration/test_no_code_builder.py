@@ -49,7 +49,7 @@ async def test_no_code_build_preview_export_three_clients_and_stale_guard(api, t
         effects.append(args["query"])
         return {"results": [{"title": args["query"], "url": "https://example.org/source"}]}
     hub.tools.register(ToolSpec(name="research.search", description="Search fixture sources", input_schema={"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}, output_schema={"type": "object", "properties": {"results": {"type": "array"}}}), search)
-    async with live_server(remote) as provider_url, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as provider_url, httpx.AsyncClient(base_url=url, timeout=30) as client:
         hub.models.register("planner", HTTPProvider(provider_url), "synthetic-model", ["chat", "decision"])
         body = {"name": "我的报告助手", "purpose": "搜索材料、总结并保留来源，保存报告", "construction": "automatic", "model": "auto"}
         saved = (await client.post("/v1/studio/assistants", json=body)).json()
@@ -110,7 +110,7 @@ async def test_builder_missing_capability_invalid_plan_and_write_approval(api):
         return {"receipt": "synthetic-only"}
     hub.tools.register(ToolSpec(name="business.write", effect="write", idempotent=False,
         input_schema={"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}), write)
-    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url, timeout=30) as client:
         hub.models.register("planner", HTTPProvider(origin), "fixture", ["chat", "decision"])
         saved=(await client.post('/v1/studio/assistants', json={"name":"OCR","purpose":"处理图片", "construction":"automatic","model":"auto", "limits":{"model_calls":3}})).json()
         path='/v1/studio/assistants/'+saved['id']
@@ -150,7 +150,7 @@ async def test_builder_missing_capability_invalid_plan_and_write_approval(api):
 
 async def test_builder_no_real_model_no_empty_export_and_legacy_preserved(api):
     url, hub=api
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         saved=(await client.post('/v1/studio/assistants',json={'name':'new','purpose':'write a report','construction':'automatic','model':'auto'})).json()
         path='/v1/studio/assistants/'+saved['id']
         assert (await client.post(path+'/build')).json()['status']=='waiting_connections'
@@ -169,7 +169,7 @@ async def test_connection_test_and_save_failure_can_retry_same_name(api):
         if payload['model'] == 'error':
             return JSONResponse({'error': 'private upstream body'}, status_code=503)
         return {'choices': [{'message': {'role': 'assistant', 'content': 'connected'}}]}
-    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url, timeout=30) as client:
         body = {'alias': 'new-model', 'base_url': origin, 'model': 'error', 'api_key': 'synthetic-secret'}
         failed = await client.post('/v1/studio/connections/test-and-save', json=body)
         assert failed.status_code == 502 and '503' in failed.json()['detail']

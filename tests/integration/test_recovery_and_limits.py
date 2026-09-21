@@ -50,7 +50,7 @@ async def test_composite_restart_cancel_and_wall_time(tmp_path):
     restarted = Hub(tmp_path / "composite.db", lease_seconds=5, poll_seconds=0.01)
     await restarted.start()
     try:
-        async with asyncio.timeout(15):
+        async with asyncio.timeout(30):
             while len(restarted.store.run(run_id)["approvals"]) != 2:
                 await asyncio.sleep(0.02)
         restarted.store.cancel(run_id)

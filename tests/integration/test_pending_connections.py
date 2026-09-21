@@ -20,7 +20,7 @@ def compile_engine(hub):
 
 
 async def phase(hub, conversation, wanted):
-    async with asyncio.timeout(15):
+    async with asyncio.timeout(30):
         while True:
             await hub.conversations.tick()
             current = hub.conversations.get(conversation)
@@ -65,7 +65,7 @@ def pending_provider():
 
 async def test_no_models_keeps_task_and_attachments_across_restart(api):
     url, hub = api
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         artifact = (await client.post('/v1/artifacts/upload?name=notes.txt', content=b'original material',
                                     headers={'Content-Type': 'text/plain'})).json()
         conversation = (await client.post('/v1/conversations', json={'workspace': True})).json()
@@ -96,7 +96,7 @@ async def test_no_models_keeps_task_and_attachments_across_restart(api):
         return {'choices': [{'message': {'content': json.dumps({'action': 'reply', 'message': '继续处理原材料'})}}]}
 
     try:
-        async with live_server(app) as origin, live_server(remote) as endpoint, httpx.AsyncClient(base_url=origin) as client:
+        async with live_server(app) as origin, live_server(remote) as endpoint, httpx.AsyncClient(base_url=origin, timeout=30) as client:
             assert restored.conversations.get(cid)['turns'][0]['task']['phase'] == 'waiting_connections'
             await client.post('/v1/studio/connections', json={'alias': 'planner', 'base_url': endpoint, 'model': 'text'})
             assert not calls  # Adding a connection alone does not execute saved requests.
@@ -113,7 +113,7 @@ async def test_no_models_keeps_task_and_attachments_across_restart(api):
 async def test_media_blueprint_rebinds_new_connection_without_losing_original(api):
     url, hub = api
     remote, calls = pending_provider()
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         await client.post('/v1/studio/connections', json={'alias': 'planner', 'base_url': endpoint, 'model': 'text'})
         artifact = (await client.post('/v1/artifacts/upload?name=original.png', content=b'original-image-fixture',
                                     headers={'Content-Type': 'image/png'})).json()
@@ -130,7 +130,7 @@ async def test_media_blueprint_rebinds_new_connection_without_losing_original(ap
         await client.post('/v1/studio/connections', json={'alias': 'photos', 'base_url': endpoint,
                           'model': 'gpt-image-2', 'capabilities': ['image']})
         assert (await client.post(f'/v1/conversations/{cid}/resume-connections')).json()['resumed']
-        async with asyncio.timeout(15):
+        async with asyncio.timeout(30):
             while True:
                 await hub.conversations.tick()
                 c = hub.conversations.get(cid)
@@ -148,7 +148,7 @@ async def test_media_blueprint_rebinds_new_connection_without_losing_original(ap
 
 async def test_assistant_can_be_created_before_any_model(api):
     url, hub = api
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         assistant = (await client.post('/v1/studio/assistants', json={'name': '未来的助手', 'purpose': '整理文本',
                      'construction': 'automatic', 'model': 'auto'})).json()
         path = '/v1/studio/assistants/'+assistant['id']
@@ -193,7 +193,7 @@ async def test_browser_return_from_setup_resumes_original_turn(api):
             await page.locator('#saveConnectionOnly').click()
             await expect(page.locator('#connectionDialog')).not_to_be_visible()
             await page.locator('[data-group=conversations]').click()
-            await expect(page.locator('.chat-result-message')).to_contain_text('已使用新连接继续原需求', timeout=15000)
+            await expect(page.locator('.chat-result-message')).to_contain_text('已使用新连接继续原需求', timeout=30000)
             assert len(hub.conversations.list()) == 1
             assert len(hub.conversations.get(hub.conversations.list()[0]['id'])['turns']) == 1
             assert not errors
@@ -203,7 +203,7 @@ async def test_browser_return_from_setup_resumes_original_turn(api):
 
 async def test_follow_up_preserves_waiting_material_and_cancel_does_not_resume(api):
     url, hub = api
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         artifact = (await client.post('/v1/artifacts/upload?name=source.txt', content=b'keep this',
                                     headers={'Content-Type': 'text/plain'})).json()
         cid = (await client.post('/v1/conversations', json={'workspace': True})).json()['id']
@@ -258,7 +258,7 @@ async def test_conceptual_draft_keeps_parallel_steps_without_inventing_api_schem
         return {'choices': [{'message': {'content': json.dumps({'workflow': None, 'explanation': '步骤已规划，等待生图服务',
             'questions': [], 'required_connections': [requirement], 'planned_steps': steps if len(calls)>1 else []})}}]}
 
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         await client.post('/v1/studio/connections', json={'alias': 'planner', 'model': 'text', 'base_url': endpoint})
         body = {'name': '双方案', 'purpose': '做两张图', 'model': 'planner', 'construction': 'automatic'}
         assistant = (await client.post('/v1/studio/assistants', json=body)).json()
@@ -293,11 +293,11 @@ async def test_queued_follow_up_continues_when_previous_turn_waits_for_setup(api
                                          'depends_on': [], 'requires': ['image']}]}
         return {'choices': [{'message': {'content': json.dumps(result)}}]}
 
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         await client.post('/v1/studio/connections', json={'alias': 'planner', 'model': 'text', 'base_url': endpoint})
         cid = (await client.post('/v1/conversations', json={'workspace': True})).json()['id']
         await client.post(f'/v1/conversations/{cid}/messages', json={'text': '原始任务'})
-        await asyncio.wait_for(entered.wait(), 5)
+        await asyncio.wait_for(entered.wait(), 30)
         await client.post(f'/v1/conversations/{cid}/messages', json={'text': '补充约束'})
         release.set()
         waiting = await phase(hub, cid, 'waiting_connections')

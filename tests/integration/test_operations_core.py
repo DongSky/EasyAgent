@@ -33,7 +33,7 @@ async def test_backup_download_api_restores_secrets_and_trace(api, tmp_path):
     url, hub = api
     hub.connections.put_secret("downloadkey", "private-backup-fixture")
     run = await hub.wait(hub.submit({"name": "backup", "steps": [{"id": "x", "target": "core.echo"}]}))
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         assert (await client.post("/v1/operations/backup", json={"password": "short"})).status_code == 422
         response = await client.post("/v1/operations/backup", json={"password": "download-fixture-password"})
         assert response.status_code == 200

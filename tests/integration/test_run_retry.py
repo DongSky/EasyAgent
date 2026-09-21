@@ -61,14 +61,14 @@ async def test_default_model_wait_has_no_read_deadline_and_can_be_cancelled(hub,
         run_id = hub.submit({'name': 'unlimited cancellable response', 'steps': [
             {'id': 'wait', 'kind': 'model', 'target': 'planner', 'input': {'prompt': 'test', 'parameters': {'stream': streaming}}}]})
         try:
-            await asyncio.wait_for(entered.wait(), 10)
+            await asyncio.wait_for(entered.wait(), 30)
             await asyncio.sleep(.15)
             assert hub.store.run(run_id)['status'] == 'running'
             assert seen[-1]['read'] is None and seen[-1]['write'] is None
             assert seen[-1]['connect'] == 20
             hub.store.cancel(run_id)
             assert (await hub.wait(run_id))['status'] == 'cancelled'
-            await asyncio.wait_for(disconnected.wait(), 10)
+            await asyncio.wait_for(disconnected.wait(), 30)
         finally:
             release.set()
 
@@ -235,7 +235,7 @@ async def test_manual_retry_keeps_receipts_checkpoint_budget_and_skipped_conditi
     usage = run['usage']['tool_calls']
     ready = True
     body = {'expected_updated': run['updated'], 'longer_wait': True}
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         response = await client.post(f"/v1/runs/{run['id']}/retry", json=body)
         assert response.status_code == 200, response.text
         duplicate = await client.post(f"/v1/runs/{run['id']}/retry", json=body)
@@ -312,7 +312,7 @@ async def test_chat_retry_restores_same_turn_and_preserves_failure_history(api):
         return {'action': 'use', 'candidate': 'resume@1', 'confidence': 1, 'inputs': {}, 'message': '复用'}
 
     remote, _ = provider_app(route)
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         hub.models.register('router', HTTPProvider(endpoint), 'fixture', ['decision'])
         c = await hub.conversations.create({'workspace': True, 'model': 'router'})
         await hub.conversations.send(c['id'], {'text': '处理', 'intent': 'workflow', 'workflow': 'resume@1'})
@@ -372,10 +372,10 @@ async def test_browser_retry_button_resumes_same_chat_and_refreshes_cached_failu
             await expect(card.get_by_text('远程服务响应超时（等待返回数据超过时限）', exact=True)).to_be_visible()
             ready = True
             await card.locator('[data-retry]').get_by_role('button', name='持续等待重试').click()
-            await asyncio.wait_for(entered.wait(), 5)
+            await asyncio.wait_for(entered.wait(), 30)
             await expect(card.locator('[data-retry-run]')).to_have_count(0)
             release.set()
-            await expect(card.locator('[data-reply]')).to_have_text('重试成功，沿用原任务。', timeout=10000)
+            await expect(card.locator('[data-reply]')).to_have_text('重试成功，沿用原任务。', timeout=30000)
             assert not errors, errors
             assert sum(e['kind'] == 'run.retried' for e in hub.store.events(turn['run_id'])) == 1
         finally:
@@ -399,7 +399,7 @@ async def test_builder_retry_ui_keeps_existing_build(api, monkeypatch):
                 'explanation': '保存输入', 'questions': []})
 
     hub.models.register('planner', Planner(), 'fixture', ['decision'])
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         assistant = (await client.post('/v1/studio/assistants', json={
             'name': '重试构建', 'purpose': '保存输入', 'model': 'planner', 'construction': 'automatic'})).json()
         build = (await client.post('/v1/studio/assistants/'+assistant['id']+'/build')).json()
@@ -414,7 +414,7 @@ async def test_builder_retry_ui_keeps_existing_build(api, monkeypatch):
             await expect(page.locator('#assistantPlan [data-retry-run="longer"]')).to_be_visible()
             ready = True
             await page.locator('#assistantPlan [data-retry-run="longer"]').click()
-            await expect(page.locator('#openPlanCanvas')).to_be_visible(timeout=10000)
+            await expect(page.locator('#openPlanCanvas')).to_be_visible(timeout=30000)
             assert hub.store.run(build['id'])['status'] == 'succeeded'
         finally:
             await browser.close()
@@ -447,7 +447,7 @@ async def test_builder_manual_retry_reuses_research_and_completed_plan(api, monk
                 'explanation': '复用搜索结果', 'questions': []})
 
     hub.models.register('planner', Planner(), 'fixture', ['decision'])
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         assistant = (await client.post('/v1/studio/assistants', json={
             'name': '恢复研究', 'purpose': '核验资料', 'model': 'planner', 'construction': 'automatic'})).json()
         build = (await client.post('/v1/studio/assistants/'+assistant['id']+'/build')).json()
@@ -508,7 +508,7 @@ async def test_retried_build_graph_animates_without_replacing_nodes(api, monkeyp
             await page.route('**/v1/runs/*/retry', delay_retry)
             ready = True
             await card.locator('[data-retry]').get_by_role('button', name='持续等待重试').click()
-            await asyncio.wait_for(request_seen.wait(), 5)
+            await asyncio.wait_for(request_seen.wait(), 30)
             await expect(card.locator('[aria-busy="true"]')).to_have_text('正在提交重试…')
             await expect(card.locator('.retry-request-spinner')).to_have_css('animation-name', 'chatSpin')
             allow_request.set()
@@ -525,7 +525,7 @@ async def test_retried_build_graph_animates_without_replacing_nodes(api, monkeyp
             await expect(node).to_have_attribute('data-status', 'running')
             await expect(node.locator('.chat-node-indicator')).to_have_css('animation-name', 'chatSpin')
             release.set()
-            await expect(node).to_have_attribute('data-status', 'succeeded', timeout=10000)
+            await expect(node).to_have_attribute('data-status', 'succeeded', timeout=30000)
             await expect(card.locator('.chat-task-mark.is-working')).to_have_count(0)
         finally:
             allow_request.set()

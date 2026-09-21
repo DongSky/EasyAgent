@@ -168,7 +168,7 @@ async def test_catalog_text_dialects_preserve_model_ids_and_parameters(api, monk
         assert body['temperature'] == .2
         return {'choices':[{'message':{'content':'ok'},'finish_reason':'stop'}]}
     monkeypatch.setenv('TEST_PROTOCOL_KEY', 'fixture-key')
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         discover = await client.post('/v1/studio/model-catalog/discover', json={'base_url':endpoint+'/v1', 'api_key_env':'TEST_PROTOCOL_KEY'})
         assert discover.status_code == 200
         for name, params in [('test-reasoner', {'reasoning':{'effort':'low'}}), ('test-chat', {'temperature':.2}), ('test-native', {})]:

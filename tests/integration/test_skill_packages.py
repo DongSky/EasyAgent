@@ -11,7 +11,7 @@ from easyagent.skill_packages import builtin_skills
 async def test_skill_install_snapshot_resources_updates_and_share(api, tmp_path):
     url, hub = api
     p = builtin_skills()[0]["package"]
-    async with httpx.AsyncClient(base_url=url) as c:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as c:
         r = await c.post("/v1/skill-packages/install", json={"package": p})
         assert r.status_code == 200, r.text
         name = r.json()["name"]
@@ -119,7 +119,7 @@ async def test_skill_draft_preview_install_and_on_demand_read(api):
             return ModelResult(data=package, usage={"mock": True})
 
     hub.models.register("skill-author", Author(), "fixture", ["decision"])
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         response = await client.post(
             "/v1/skill-drafts", json={"requirement": "Moving checklist", "model": "skill-author"}
         )

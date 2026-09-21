@@ -112,7 +112,7 @@ async def test_dynamic_delegation_single_worker_and_capability_denial(hub):
             }
         ],
     }
-    run = await hub.wait(hub.submit(flow), timeout=15)
+    run = await hub.wait(hub.submit(flow), timeout=30)
     assert run["status"] == "succeeded", run
     assert run["steps"][0]["output"]["text"] == "child finished"
     assert run["usage"]["child_runs"] == 1
@@ -159,7 +159,7 @@ async def test_subagent_result_is_bounded_and_carries_a_hash(hub):
             "prompt": "delegate", "tools": ["agents.spawn", "agents.wait"],
             "delegation": {"models": ["child"], "tools": []}}}],
     }
-    run = await hub.wait(hub.submit(flow), timeout=15)
+    run = await hub.wait(hub.submit(flow), timeout=30)
     assert run["status"] == "succeeded", run
     payload = json.loads(run["steps"][0]["output"]["text"])
     assert payload["status"] == "succeeded"
@@ -207,7 +207,7 @@ async def test_subagent_result_schema_corrects_once_then_keeps_unverified_work(h
         child = Child(obey)
         hub.models.register("parent", child, "parent", ["chat", "decision"])
         hub.models.register("child", child, "child", ["chat", "decision"])
-        run = await hub.wait(hub.submit(flow), timeout=15)
+        run = await hub.wait(hub.submit(flow), timeout=30)
         assert run["status"] == "succeeded", run
         result = json.loads(run["steps"][0]["output"]["text"])
         if obey:
@@ -243,7 +243,7 @@ async def test_spawn_refuses_a_contract_the_child_model_cannot_meet(hub):
                                     "required": ["total"]}})], usage={"mock": True})
 
     hub.models.register("parent", Parent(), "parent", ["chat", "decision"])
-    run = await hub.wait(hub.submit(flow), timeout=15)
+    run = await hub.wait(hub.submit(flow), timeout=30)
     assert run["status"] == "succeeded", run
     assert "cannot return a structured result" in run["steps"][0]["output"]["text"]
     assert not run["children"]
@@ -300,7 +300,7 @@ async def test_a_parent_reads_a_running_childs_notes_without_waiting(hub):
         "delegation": {"models": ["child"], "tools": ["agents.note"]}}}]}
     hub.models.register("parent", Parent(), "parent", ["chat"])
     hub.models.register("child", Child(), "child", ["chat"])
-    run = await hub.wait(hub.submit(flow), timeout=15)
+    run = await hub.wait(hub.submit(flow), timeout=30)
     assert run["status"] == "succeeded", run
     # The note arrived through agents.notes while the child was still working, with its author.
     children = run["children"]
@@ -360,7 +360,7 @@ async def test_broadcast_reaches_siblings_and_nothing_outside_the_tree(hub, conc
         "delegation": {"models": ["child"], "tools": []}}}]}
     hub.models.register("parent", Parent(), "parent", ["chat"])
     hub.models.register("child", Child(), "child", ["chat"])
-    run = await hub.wait(hub.submit(flow), timeout=15)
+    run = await hub.wait(hub.submit(flow), timeout=30)
     assert run["status"] == "succeeded", run
     children = [c["id"] for c in run["children"]]
     assert len(children) == 2
@@ -417,7 +417,7 @@ async def test_max_active_suspends_a_spawn_instead_of_refusing_it(hub):
     flow = {"name": "ceiling", "steps": [{"id": "agent", "kind": "agent", "target": "parent", "input": {
         "prompt": "delegate", "tools": ["agents.spawn", "agents.wait"],
         "delegation": {"models": ["slow"], "tools": [], "max_active": 2}}}]}
-    run = await hub.wait(hub.submit(flow), timeout=20)
+    run = await hub.wait(hub.submit(flow), timeout=30)
     assert run["status"] == "succeeded", run
     assert run["steps"][0]["output"]["text"] == "all three spawned"
     assert len(run["children"]) == 3
@@ -465,7 +465,7 @@ async def test_omitted_tools_inherit_the_parent_grant_and_a_named_list_narrows_i
             seen[request.messages[1]["content"]] = {t.name for t in request.tools}
             return ModelResult(text="child answer", usage={"mock": True})
 
-    def until(predicate, timeout=10):
+    def until(predicate, timeout=30):
         async def wait():
             async with asyncio.timeout(timeout):
                 while not predicate():
@@ -481,7 +481,7 @@ async def test_omitted_tools_inherit_the_parent_grant_and_a_named_list_narrows_i
         "delegation": {"models": ["child"], "tools": [*inherited_tools, outside_grant]}}}]}
     hub.models.register("parent", Parent(), "parent", ["chat"])
     hub.models.register("child", Child(), "child", ["chat"])
-    run = await hub.wait(hub.submit(flow), timeout=15)
+    run = await hub.wait(hub.submit(flow), timeout=30)
     assert run["status"] == "succeeded", run
     await until(lambda: len(seen) == 2)()
 
@@ -527,7 +527,7 @@ async def test_inheritance_never_exceeds_what_the_parent_step_holds(hub):
         "delegation": {"models": ["child"], "tools": ["web.search", "development.save_workflow"]}}}]}
     hub.models.register("parent", Parent(), "parent", ["chat"])
     hub.models.register("child", Child(), "child", ["chat"])
-    run = await hub.wait(hub.submit(flow), timeout=15)
+    run = await hub.wait(hub.submit(flow), timeout=30)
     assert run["status"] == "succeeded", run
     assert seen["tools"] == {"web.search", "agents.reply", "agents.note"}
     assert "development.save_workflow" not in seen["tools"]

@@ -43,7 +43,7 @@ async def test_missing_time_nested_pause_restart_and_single_resume(tmp_path):
         await hub.stop()
     hub = Hub(path, poll_seconds=0.01)
     world.register(hub)
-    async with live_server(create_app(hub)) as url, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(create_app(hub)) as url, httpx.AsyncClient(base_url=url, timeout=30) as client:
         pending = (await client.get("/v1/runs/" + identifier)).json()
         request_id = pending["input_requests"][0]["id"]
         for invalid in ({}, {"after": "unknown"}, {"after": "2026-09-19T09:00:00"}):
@@ -70,7 +70,7 @@ async def test_order_policy_confirmation_and_actual_effect(api, world, action):
             db.execute("UPDATE orders SET status='shipped'")
     if action == "wrong_identity":
         definition["inputs"]["credential"] = "invalid"
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         a = await client.post("/v1/runs", json=definition, headers={"Idempotency-Key": "cancel-message"})
         identifier = a.json()["id"]
         assert (await client.post("/v1/runs", json=definition, headers={"Idempotency-Key": "cancel-message"})).json()["id"] == identifier
@@ -111,7 +111,7 @@ async def test_parallel_tools_join_and_missing_parameter(api, world):
     invalid = hub.submit({"name": "missing argument", "steps": [{"id": "query", "target": "scenario.reminders"}]})
     assert (await hub.wait(invalid))["status"] == "failed"
     assert not world.lookups
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         response = await client.post("/v1/runs", json={"name": "missing function", "steps": [{"id": "x", "target": "scenario.unavailable"}]})
         assert response.status_code == 422
 

@@ -67,7 +67,7 @@ async def test_mcp_stdio_http_and_hub_server(api):
     process = await asyncio.create_subprocess_exec(sys.executable, fixture, "--http", "--port", str(port),
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
     try:
-        async with httpx.AsyncClient() as client, asyncio.timeout(10):
+        async with httpx.AsyncClient(timeout=30) as client, asyncio.timeout(30):
             while True:
                 try:
                     await client.get(f"http://127.0.0.1:{port}/mcp")

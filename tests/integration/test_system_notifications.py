@@ -15,7 +15,7 @@ OTHER_DEVICE = "b" * 32
 
 async def test_system_notification_workflow_approval_device_binding_claim_and_restart(api):
     url, hub = api
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         config = {"id": "desktop", "title": "系统通知", "kind": "system", "device_id": DEVICE}
         response = await client.post("/v1/connections", json=config)
         assert response.status_code == 201, response.text
@@ -39,7 +39,7 @@ async def test_system_notification_workflow_approval_device_binding_claim_and_re
     # Unclaimed queue and pinned connector config survive constructing a fresh Hub.
     restored = Hub(hub.store.path)
     async with live_server(create_app(restored, manage_workers=False)) as restarted_url:
-        async with httpx.AsyncClient(base_url=restarted_url) as client:
+        async with httpx.AsyncClient(base_url=restarted_url, timeout=30) as client:
             assert (await client.post("/v1/connections/system/claim", json={"device_id": OTHER_DEVICE})).json() == {"notification": None}
             claims = await asyncio.gather(*[
                 client.post("/v1/connections/system/claim", json={"device_id": DEVICE}) for _ in range(2)
@@ -69,7 +69,7 @@ async def test_system_notification_workflow_approval_device_binding_claim_and_re
 
 async def test_system_notification_settings_validation_and_test_failure_receipt(api):
     url, hub = api
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         config = {"id": "browser", "title": "本机提醒", "kind": "system", "device_id": DEVICE}
         for changes in [{"device_id": None}, {"url": "https://example.com"}, {"credential": "secret"}, {"idempotent": True}]:
             assert (await client.post("/v1/connections", json={**config, **changes})).status_code == 422

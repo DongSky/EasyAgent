@@ -13,7 +13,7 @@ from easyagent.runtime import Hub
 from easyagent.store import Conflict
 
 
-async def until(hub, run_id, predicate, timeout=5):
+async def until(hub, run_id, predicate, timeout=30):
     async with asyncio.timeout(timeout):
         while True:
             run = hub.store.run(run_id)
@@ -44,7 +44,7 @@ async def test_library_general_decision_reuse_publish_and_platform_contracts(api
             'type': 'choice', 'choice': choice, 'confidence': .95,
             'probabilities': {k: .95 if k == choice else .05 for k in choices}}}}
     monkeypatch.setenv('TYPESAFE_API_KEY', 'protocol-only-key')
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         created = await client.post('/v1/library/library.typesafe.evaluate/install', json={'endpoint': endpoint+'/decide'})
         assert created.status_code == 201, created.text
         manifest = created.json()

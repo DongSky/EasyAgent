@@ -320,9 +320,9 @@ async def test_unlimited_builder_remains_cancellable_without_publishing_a_draft(
 
     hub.models.register('planner', Builder(), 'fixture', ['decision'])
     identifier = start_build(hub, 'cancel-build', assistant('Wait until stopped'))['id']
-    await asyncio.wait_for(entered.wait(), 5)
+    await asyncio.wait_for(entered.wait(), 30)
     hub.store.cancel(identifier)
-    await asyncio.wait_for(cancelled.wait(), 5)
+    await asyncio.wait_for(cancelled.wait(), 30)
     assert hub.store.run(identifier)['status'] == 'cancelled'
     assert not hub.development.workflows() and not hub.code.list()
 

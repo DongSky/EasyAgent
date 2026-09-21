@@ -113,7 +113,7 @@ async def test_chat_creates_missing_node_finishes_task_and_reuses_it(api):
     url, hub = api
     model = CSVBuilder()
     hub.models.register('planner', model, 'fixture', ['decision'])
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         conversation = (await client.post('/v1/conversations', json={'workspace': True, 'model': 'planner'})).json()
         path = f"/v1/conversations/{conversation['id']}/messages"
         response = await client.post(path, json={'text': 'customer,amount\nAlice,2\nAlice,3', 'intent': 'create'})
@@ -226,7 +226,7 @@ async def test_chat_repairs_actual_failure_without_repeating_completed_write(api
                 'explanation': '依据失败结果修正输入。', 'questions': []})
 
     hub.models.register('planner', RepairBuilder(), 'fixture', ['decision'])
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         conversation = (await client.post('/v1/conversations', json={'workspace': True, 'model': 'planner'})).json()
         await client.post(f"/v1/conversations/{conversation['id']}/messages", json={'text': '先保存一次，再计算答案', 'intent': 'create'})
         waiting = await settled(hub, conversation['id'], status='waiting_approval')
@@ -265,7 +265,7 @@ async def test_connected_image_model_gets_edit_node_without_user_schema(api):
                     'prompt': {'$ref': '$input.message'}, 'n': 1}}}]},
                 'explanation': '直接编辑原图并保留原件。', 'questions': []})
 
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         hub.models.register('planner', EditBuilder(), 'fixture', ['decision'])
         hub.models.register('image', HTTPProvider(endpoint+'/v1', 'image-fixture-key'), 'gpt-image-2', ['image'])
         upload = (await client.post('/v1/artifacts/upload?name=portrait.png', content=original,

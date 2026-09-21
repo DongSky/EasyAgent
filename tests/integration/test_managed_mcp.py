@@ -92,7 +92,7 @@ async def test_managed_mcp_oauth_pkce_refresh_discovery_and_restart(api):
         }
 
     app.mount("/", remote)
-    async with live_server(app) as base, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(app) as base, httpx.AsyncClient(base_url=url, timeout=30) as client:
         endpoint = base
         profile = {
             "id": "oauthdemo",
@@ -103,7 +103,7 @@ async def test_managed_mcp_oauth_pkce_refresh_discovery_and_restart(api):
         }
         response = await client.post("/v1/mcp/connections", json=profile)
         assert response.status_code == 202, response.text
-        async with asyncio.timeout(15):
+        async with asyncio.timeout(30):
             while "oauthdemo" not in hub.mcp.pending:
                 if hub.mcp.errors:
                     raise AssertionError(hub.mcp.errors)
@@ -119,7 +119,7 @@ async def test_managed_mcp_oauth_pkce_refresh_discovery_and_restart(api):
             "/v1/mcp/oauth/callback", params={"state": params["state"][0], "code": "valid-code"}
         )
         assert good.status_code == 200, good.text
-        await asyncio.wait_for(hub.mcp.tasks["oauthdemo"], 15)
+        await asyncio.wait_for(hub.mcp.tasks["oauthdemo"], 30)
         assert not hub.mcp.errors, hub.mcp.errors
         flow = {
             "name": "managed",
@@ -139,7 +139,7 @@ async def test_managed_mcp_oauth_pkce_refresh_discovery_and_restart(api):
 
         profile["permissions"]["multiply"] = {"effect": "read", "idempotent": True}
         await hub.mcp.connect(profile)
-        await asyncio.wait_for(hub.mcp.tasks["oauthdemo"], 15)
+        await asyncio.wait_for(hub.mcp.tasks["oauthdemo"], 30)
         assert "mcp.oauthdemo.multiply" in hub.tools.entries
         r = await hub.wait(
             hub.submit(
@@ -155,7 +155,7 @@ async def test_managed_mcp_oauth_pkce_refresh_discovery_and_restart(api):
         restored = Hub(hub.store.path, poll_seconds=0.01)
         await restored.start()
         try:
-            await asyncio.wait_for(restored.mcp.tasks["oauthdemo"], 15)
+            await asyncio.wait_for(restored.mcp.tasks["oauthdemo"], 30)
             assert not restored.mcp.errors, restored.mcp.errors
             r = await restored.wait(restored.submit(flow))
             assert r["status"] == "succeeded"

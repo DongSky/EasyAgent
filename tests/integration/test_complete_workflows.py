@@ -13,7 +13,7 @@ async def test_foreach_subworkflow_approval_and_parent_budget(hub):
         {"id": "approve", "kind": "approval", "depends_on": ["echo"], "input": {"item": {"$ref": "echo.item"}}}]}
     identifier = hub.submit({"name": "batch", "steps": [{"id": "batch", "kind": "foreach", "input": {"items": [1, 2, 3]}, "body": body}]})
     pending = await hub.wait(identifier)
-    async with asyncio.timeout(5):
+    async with asyncio.timeout(30):
         # A parent can be checking its children while the last approval appears.
         # Wait for both the complete approval set and the parent's waiting state.
         while len(pending["approvals"]) < 3 or pending["status"] != "waiting_approval":
@@ -43,7 +43,7 @@ async def test_foreach_preserves_explicit_shared_inputs_and_defaults_across_rest
         {'id': 'retouch', 'kind': 'foreach', 'depends_on': ['prepare_prompt'], 'input': {
             'items': ['original-one', 'original-two'], 'edit_prompt': {'$ref': 'prepare_prompt.text'},
             'item': 'must not override the image', 'index': 99}, 'body': body}]})
-    async with asyncio.timeout(5):
+    async with asyncio.timeout(30):
         while len(hub.store.run(identifier)['approvals']) < 2:
             await asyncio.sleep(.01)
     await hub.stop()
@@ -67,7 +67,7 @@ async def test_foreach_preserves_explicit_shared_inputs_and_defaults_across_rest
 
 async def test_knowledge_to_agent_artifact_and_trace(api):
     url, hub = api
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         document = {"namespace": "home", "title": "搬家约定", "source": "notice-1", "text": "搬家日期是 2026-10-01。电梯需要提前预约。", "embedding_model": "mock"}
         ingest = await client.post("/v1/knowledge/documents", json=document)
         assert ingest.status_code == 201
@@ -129,7 +129,7 @@ async def test_triggers_dedup_pause_and_missed_schedule(api):
     url, hub = api
     workflow = {"name": "triggered", "steps": [{"id": "a", "kind": "transform", "input": {"payload": {"$ref": "$input"}}}]}
     hook = hub.scheduler.create(Trigger(name="inbox", kind="webhook", workflow=workflow))
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         path = f"/v1/triggers/{hook['id']}/fire"
         a = (await client.post(path, json={"notice": "hello"}, headers={"Idempotency-Key": "message-1"})).json()
         b = (await client.post(path, json={"notice": "hello"}, headers={"Idempotency-Key": "message-1"})).json()

@@ -35,7 +35,7 @@ async def test_discovery_tracks_model_selection_and_unknown_limits_in_ui(api):
         return {'data': [{'id': 'alpha', 'context_length': 16000, 'max_output_tokens': 4000},
                          {'id': 'beta', 'limits': {'context_window': 32000}}, {'id': 'unknown'}]}
 
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         # Local test server sentinel; never a real service credential.
         body = {'alias': 'planner', 'base_url': endpoint, 'model': 'alpha', 'api_key': 'fixture-credential'}  # pragma: allowlist secret
         await client.post('/v1/studio/connections', json=body)

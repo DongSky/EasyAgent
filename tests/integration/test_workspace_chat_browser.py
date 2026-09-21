@@ -39,14 +39,14 @@ async def test_operator_child_workflow_artifacts_are_downloadable_in_chat(api):
             await page.locator("#conversations [data-destination]").select_option("create")
             await page.locator("#workspaceMessage").fill("创建一个流程，交付两个文本文件。")
             await page.locator("#conversations [data-send]").click()
-            await expect(page.locator(".chat-result-file")).to_have_count(2, timeout=20000)
+            await expect(page.locator(".chat-result-file")).to_have_count(2, timeout=30000)
             await expect(page.locator("[data-children] summary")).to_contain_text("工作流 · 文件交付 · 已完成")
             async with page.expect_download() as event:
                 await page.locator(".chat-result-file").filter(has_text="first.txt").locator("[data-download]").click()
             download = await event.value
             assert (await download.path()).read_text() == "first result"
             await page.reload()
-            await expect(page.locator(".chat-result-file")).to_have_count(2, timeout=15000)
+            await expect(page.locator(".chat-result-file")).to_have_count(2, timeout=30000)
         finally:
             await browser.close()
 
@@ -78,14 +78,14 @@ async def test_nested_wait_labels_show_the_actual_blocker(api):
             await page.locator('#conversations [data-execution]').select_option('confirm')
             await page.locator('#workspaceMessage').fill('运行嵌套流程')
             await page.locator('#conversations [data-send]').click()
-            await expect(page.locator('[data-node="edit"] small')).to_have_text('子流程等待确认执行', timeout=15000)
+            await expect(page.locator('[data-node="edit"] small')).to_have_text('子流程等待确认执行', timeout=30000)
             await expect(page.locator('[data-node="save"] small')).to_have_text('等待前置步骤：逐张编辑原图')
             await expect(page.locator('.chat-task-details')).to_contain_text('子流程等待确认执行')
             await page.locator('[data-approve]').click()
-            await expect(page.locator('[data-node="edit"] small')).to_have_text('子流程结果不明，需核验', timeout=15000)
+            await expect(page.locator('[data-node="edit"] small')).to_have_text('子流程结果不明，需核验', timeout=30000)
             await expect(page.locator('.chat-task-details')).to_contain_text('子流程结果不明，需核验')
             await page.reload()
-            await expect(page.locator('[data-node="edit"] small')).to_have_text('子流程结果不明，需核验', timeout=15000)
+            await expect(page.locator('[data-node="edit"] small')).to_have_text('子流程结果不明，需核验', timeout=30000)
         finally:
             await browser.close()
 
@@ -133,7 +133,7 @@ async def test_chat_upload_dispatch_graph_restore_canvas_and_mobile(api, tmp_pat
             await expect(page.locator('#conversations .chat-file small')).not_to_have_text('正在上传…')
             await page.locator('#workspaceMessage').fill('请整理这份学校通知，保存一份行动清单。')
             await page.locator('#conversations [data-send]').click()
-            await expect(page.locator('.chat-task-heading')).to_contain_text('通知与材料整理', timeout=20000)
+            await expect(page.locator('.chat-task-heading')).to_contain_text('通知与材料整理', timeout=30000)
             await expect(page.locator('.chat-node')).to_have_count(3)
             await expect(page.locator('.chat-node.state-running')).to_have_count(1)
             flow = page.locator('.chat-edge.state-running .chat-edge-flow')
@@ -151,7 +151,7 @@ async def test_chat_upload_dispatch_graph_restore_canvas_and_mobile(api, tmp_pat
             # Polling must preserve the current node and its animation timeline.
             await page.wait_for_function('document.querySelector(".chat-node.state-running").getAnimations({subtree:true}).some(a=>a.currentTime>1000)')
             release.set()
-            await expect(page.locator('.chat-task-heading')).to_contain_text('处理完成', timeout=20000)
+            await expect(page.locator('.chat-task-heading')).to_contain_text('处理完成', timeout=30000)
             await expect(page.locator('.chat-node.state-succeeded')).to_have_count(3)
             assert await page.locator('[data-node="organize"]').evaluate('(el)=>el===window.activeNode')
             await expect(page.locator('.chat-edge.state-running')).to_have_count(0)
@@ -165,7 +165,7 @@ async def test_chat_upload_dispatch_graph_restore_canvas_and_mobile(api, tmp_pat
             assert await page.evaluate('window.chatInjected === undefined')
             await expect(page.locator('.chat-result-file').filter(has_text='行动清单.txt')).to_be_visible()
             await page.reload()
-            await expect(page.locator('.chat-task-heading')).to_contain_text('处理完成', timeout=15000)
+            await expect(page.locator('.chat-task-heading')).to_contain_text('处理完成', timeout=30000)
             await page.locator('[data-details-toggle]').click()
             await expect(page.locator('.chat-task-details')).to_contain_text('周五下午三点')
             await page.locator('[data-details-toggle]').click()

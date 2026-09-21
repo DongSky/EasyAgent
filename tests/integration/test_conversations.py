@@ -11,7 +11,7 @@ from easyagent.runtime import Hub
 
 
 async def settle(hub, identifier):
-    async with asyncio.timeout(15):
+    async with asyncio.timeout(30):
         while True:
             await hub.conversations.tick()
             c = hub.conversations.get(identifier)
@@ -57,7 +57,7 @@ async def test_conversation_queue_steer_stream_fork_compact_restart(api, tmp_pat
 
         return StreamingResponse(events(), media_type="text/event-stream")
 
-    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url, timeout=30) as client:
         hub.models.register("session-model", HTTPProvider(endpoint, ""), "fixture", ["chat"])
         c = (
             await client.post(
@@ -74,7 +74,7 @@ async def test_conversation_queue_steer_stream_fork_compact_restart(api, tmp_pat
             json={"text": "remember apples", "idempotency_key": "first"},
         )
         assert first.status_code == 202, first.text
-        await asyncio.wait_for(started.wait(), 5)
+        await asyncio.wait_for(started.wait(), 30)
         await client.post(
             f"/v1/conversations/{c['id']}/messages", json={"text": "change to pears", "mode": "steer"}
         )

@@ -204,7 +204,7 @@ async def test_steer_message_reaches_the_running_operator(hub):
     hub.models.register('planner', model, 'fixture', ['chat', 'decision'])
     c = await hub.conversations.create({'workspace': True, 'model': 'planner'})
     await hub.conversations.send(c['id'], {'text': '慢慢处理', 'execution': 'automatic'})
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(30):
         while not hub.chat.working_turn(c['id']):
             await hub.conversations.tick()
             await asyncio.sleep(.02)
@@ -227,7 +227,7 @@ async def test_ask_user_pauses_and_resumes_with_the_answer(api):
     model = Scripted([('task.ask_user', {'question': '出发城市是哪里？'})],
                      final=lambda request, seen: '出发城市：' + seen[0]['answer']['answer'])
     hub.models.register('planner', model, 'fixture', ['chat', 'decision'])
-    async with httpx.AsyncClient(base_url=url) as client:
+    async with httpx.AsyncClient(base_url=url, timeout=30) as client:
         c = (await client.post('/v1/conversations', json={'workspace': True, 'model': 'planner'})).json()
         await client.post(f"/v1/conversations/{c['id']}/messages", json={'text': '帮我订票', 'execution': 'automatic'})
         waiting = await settled(hub, c['id'], status='waiting_input')
@@ -247,7 +247,7 @@ async def test_missing_service_is_recorded_and_the_task_waits_for_setup(hub):
     hub.models.register('planner', model, 'fixture', ['chat', 'decision'])
     c = await hub.conversations.create({'workspace': True, 'model': 'planner'})
     await hub.conversations.send(c['id'], {'text': '把这张照片压暗背景', 'execution': 'automatic'})
-    async with asyncio.timeout(10):
+    async with asyncio.timeout(30):
         while hub.conversations.get(c['id'])['turns'][-1]['status'] != 'waiting_connections':
             await hub.conversations.tick()
             await asyncio.sleep(.02)
@@ -295,7 +295,7 @@ async def test_browser_shows_operator_activity_and_saved_workflow(api):
             await page.locator('#workspaceMessage').fill('记住我喜欢简洁回答，并做一个保存笔记的流程')
             await page.locator('#conversations [data-send]').click()
             card = page.locator('.chat-turn').first
-            await expect(card.locator('.chat-task-heading')).to_contain_text('处理完成', timeout=15000)
+            await expect(card.locator('.chat-task-heading')).to_contain_text('处理完成', timeout=30000)
             await expect(card.locator('.chat-task-heading')).to_contain_text('保存笔记')
             activity = card.locator('[data-activity]')
             await expect(activity).to_be_visible()

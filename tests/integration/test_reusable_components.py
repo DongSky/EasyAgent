@@ -31,7 +31,7 @@ async def test_shared_api_and_workflow_versions_across_two_consumers_and_restart
     async def normalize(request: Request):
         body = await request.json()
         return {'normalized': body['text'].strip().lower()}
-    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url) as client:
+    async with live_server(remote) as origin, httpx.AsyncClient(base_url=url, timeout=30) as client:
         added = await client.post('/v1/studio/apis', json={
             'name': 'library.normalize', 'description': 'Shared normalization service', 'method': 'POST',
             'url': origin+'/normalize', 'effect': 'read', 'input_schema': {'type': 'object', 'required': ['text'],

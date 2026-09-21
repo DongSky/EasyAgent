@@ -42,7 +42,7 @@ async def test_generated_workflow_strict_business_contract_reuses_through_chat_a
         assert result['turns'][-1]['task']['phase'] == 'completed', result['turns'][-1]
         run = hub.store.run(result['turns'][-1]['task']['run_id'])
         assert run['steps'][0]['output'] == {'text': 'second'}
-        async with httpx.AsyncClient(base_url=url) as client:
+        async with httpx.AsyncClient(base_url=url, timeout=30) as client:
             path = '/v1/workflows/' + key.split('@')[0] + '/runs'
             response = await client.post(path, json={'inputs': {'value': 'third'}})
             assert response.status_code == 201, response.text
@@ -199,7 +199,7 @@ async def test_parallel_branches_and_reused_subworkflow_context(hub):
         entered.add(args['value'])
         if len(entered) == 2:
             both.set()
-        await asyncio.wait_for(both.wait(), 3)
+        await asyncio.wait_for(both.wait(), 30)
         return {'value': args['value']}
     hub.tools.register(ToolSpec(name='test.read'), read)
     saved = hub.development.save_workflow('pair', {'name': 'reusable pair', 'inputs': {'left': 2, 'right': 3},
