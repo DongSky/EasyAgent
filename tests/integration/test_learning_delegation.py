@@ -252,9 +252,11 @@ async def test_spawn_refuses_a_contract_the_child_model_cannot_meet(hub):
 async def test_a_parent_reads_a_running_childs_notes_without_waiting(hub):
     """Progress is pull-only: a long child reports as it goes and the parent reads it mid-flight.
 
-    The child parks itself after publishing (it raises WaitingChildren) so the parent provably
+    The child waits on an event after publishing so the parent provably
     reads a note from a child that has not finished, not a note recovered after the fact.
     """
+    release_child = asyncio.Event()
+
     class Parent:
         def __init__(self):
             self.reads = 0
@@ -290,7 +292,7 @@ async def test_a_parent_reads_a_running_childs_notes_without_waiting(hub):
                 return ModelResult(tool_calls=[ToolCall(id="n", name="agents.note",
                                                         arguments={"text": "Alice totals 200.00"})],
                                    usage={"mock": True})
-            await asyncio.sleep(.5)  # still working: the parent must read the note before this ends
+            await release_child.wait()
             return ModelResult(text="child finished too", usage={"mock": True})
 
     flow = {"name": "progress", "steps": [{"id": "agent", "kind": "agent", "target": "parent", "input": {
@@ -307,10 +309,19 @@ async def test_a_parent_reads_a_running_childs_notes_without_waiting(hub):
     notes = hub.delegation.notes_for(run["id"])
     assert [n["text"] for n in notes] == ["Alice totals 200.00"]
     assert notes[0]["author"] == children[0]["id"]
+    release_child.set()
+    assert (await hub.wait(children[0]["id"]))["status"] == "succeeded"
 
 
-async def test_broadcast_reaches_siblings_and_nothing_outside_the_tree(hub):
+@pytest.mark.parametrize('concurrency', [1, 4])
+async def test_broadcast_reaches_siblings_and_nothing_outside_the_tree(hub, concurrency):
     """One message to the caller's own children, or from a child to its siblings; never upward."""
+    await hub.stop()
+    hub.concurrency = concurrency
+    await hub.start()
+    children_started, release_children = asyncio.Event(), asyncio.Event()
+    started = 0
+
     class Parent:
         async def generate(self, request, model):
             observations = [json.loads(m["content"]) for m in request.messages if m["role"] == "tool"]
@@ -322,6 +333,8 @@ async def test_broadcast_reaches_siblings_and_nothing_outside_the_tree(hub):
                     ToolCall(id="s2", name="agents.spawn", arguments={"goal": "two", "model": "child", "tools": []}),
                 ], usage={"mock": True})
             if len(observations) == 2:
+                if concurrency > 1:
+                    await children_started.wait()
                 return ModelResult(tool_calls=[ToolCall(id="b", name="agents.broadcast",
                                                         arguments={"text": "align on the same total"})],
                                    usage={"mock": True})
@@ -333,8 +346,14 @@ async def test_broadcast_reaches_siblings_and_nothing_outside_the_tree(hub):
 
     class Child:
         async def generate(self, request, model):
-            await asyncio.sleep(.5)  # still in flight when the parent broadcasts
-            return ModelResult(text="child answer", usage={"mock": True})
+            nonlocal started
+            started += 1
+            if started == 2:
+                children_started.set()
+            await release_children.wait()
+            messages = [m["content"] for m in request.messages
+                        if m["role"] == "user" and m["content"].startswith("协作任务消息：")]
+            return ModelResult(text=json.dumps(messages), usage={"mock": True})
 
     flow = {"name": "broadcast", "steps": [{"id": "agent", "kind": "agent", "target": "parent", "input": {
         "prompt": "delegate", "tools": ["agents.spawn", "agents.wait", "agents.broadcast"],
@@ -350,11 +369,20 @@ async def test_broadcast_reaches_siblings_and_nothing_outside_the_tree(hub):
     with hub.store.connect() as db:
         inbox = [dict(r) for r in db.execute(
             "SELECT child,text,delivered FROM agent_mailbox WHERE parent=?", (run["id"],))]
-    # Both children were still running, so both received it; a finished child is not a target
-    # (a message to one that had already succeeded would never be read).
+    # Both children are unfinished. One worker broadcasts before their first model
+    # boundary; multiple workers broadcast while both model calls are in flight.
     assert {row["child"] for row in inbox} == set(children)
     assert {row["text"] for row in inbox} == {"align on the same total"}
-    assert all(row["delivered"] == 0 for row in inbox)
+    if concurrency > 1:
+        assert all(row["delivered"] == 0 for row in inbox)
+    release_children.set()
+    for child in children:
+        result = await hub.wait(child)
+        assert result["status"] == "succeeded", result
+        assert json.loads(result["steps"][0]["output"]["text"]) == ["协作任务消息：align on the same total"]
+    with hub.store.connect() as db:
+        assert db.execute("SELECT COUNT(*) FROM agent_mailbox WHERE parent=? AND delivered=1",
+                          (run["id"],)).fetchone()[0] == 2
 
 
 async def test_max_active_suspends_a_spawn_instead_of_refusing_it(hub):
