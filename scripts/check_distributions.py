@@ -27,6 +27,12 @@ def main():
                 for name in ('fastapi', 'uvicorn', 'starlette', 'easyagent_app', 'mcp', 'playwright', 'quickjs', 'wasmtime'):
                     assert importlib.util.find_spec(name) is None, name
                 from easyagent import Agent, Runtime, Sequential, Subflow, node
+                from easyagent.models import HTTPProvider, ModelRegistry, MockProvider
+                from easyagent.model_streaming import MODEL_OBSERVER as legacy_observer
+                from easyagent.models.streaming import MODEL_OBSERVER
+                from easyagent.workspace_chat import WorkspaceChat, Phase
+                from easyagent.extensions import ExtensionHost, build_package, validate_package
+                assert legacy_observer is MODEL_OBSERVER
                 @node
                 def clean(text: str) -> str: return text.strip()
                 flow = Sequential(clean, Agent('mock'))
@@ -42,6 +48,8 @@ def main():
                 assert importlib.util.find_spec('easyagent_client') is None
                 from easyagent_app import create_app, ASSETS
                 assert (ASSETS/'studio.html').is_file()
+                for module in ('requests', 'state', 'views', 'graph', 'activity'):
+                    assert (ASSETS/'chat'/f'{module}.js').is_file(), module
                 assert len(create_app().routes) >= 3
                 print('independent frontend verified')
             '''),

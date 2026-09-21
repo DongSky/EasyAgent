@@ -1,12 +1,14 @@
 # EasyAgent 开发指南
 
+先从[离线最小示例](FIRST_STEPS.zh-CN.md)开始；它不需要模型或 API Key。准备修改代码时，按[源码阅读路线](CODE_MAP.zh-CN.md)追踪一次执行。
+
 **中文** · [English](DEVELOPER_GUIDE.en.md) · [项目首页](../README.md) · [使用指南](USER_GUIDE.zh-CN.md) · [文档索引](README.md)
 
 版本基线：0.1.0 / 2026-09-20。面向 SDK 调用、节点与扩展开发、平台适配及框架维护。本文中的命令在仓库根目录执行。当前接口适用于开发预览；0.x 不承诺跨版本 ABI 稳定。
 
 ## 新手阅读顺序
 
-先读[关键词搜索到生图](GETTING_STARTED.zh-CN.md)：以多输入、分叉与汇合的完整任务讲解。导出流程图不需要密钥；实际执行需要搜索和模型服务，不需要启动 App。再读[本地 SDK 与 CLI](SDK_GUIDE.zh-CN.md)，最后按需查阅本文。下面的完整开发环境面向修改框架和运行全套测试，并非使用 SDK 的前提。
+先运行[离线最小示例](FIRST_STEPS.zh-CN.md)，再读[关键词搜索到生图](GETTING_STARTED.zh-CN.md)：以多输入、分叉与汇合的完整任务讲解。导出流程图不需要密钥；实际执行需要搜索和模型服务，不需要启动 App。再读[本地 SDK 与 CLI](SDK_GUIDE.zh-CN.md)，最后按需查阅本文。下面的完整开发环境面向修改框架和运行全套测试，并非使用 SDK 的前提。
 
 先记住三层：**节点是一个独立操作**（内部可以组合普通代码）；**工作流连接多个节点**；**子工作流保留自己的步骤图和子运行记录**。`Module` 是组织代码和构图的容器，只有 `Subflow` 明确创建子工作流边界。
 
@@ -50,9 +52,9 @@ Python 服务端包名和命令均为 `easyagent`，独立客户端为 `easyagen
 ## 代码地图与架构
 
 - `src/easyagent/contracts.py`：严格 Pydantic 公共契约、工作流图/Schema 校验；`store.py`：SQLite 事务与持久记录。
-- `runtime.py`、`tools.py`：调度、执行、工具调用、审批及恢复；`goals.py`：目标检查和流程修订；`scheduling.py`：触发器。
-- `models.py`、`model_streaming.py`：模型注册、协议与流式增量；`http_tools.py`、`openapi_tools.py`、`search.py`：声明式 API 与搜索。
-- `extensions.py`、`extension_contracts.py`、`extension_process.py`：包、贡献、执行进程；`backends.py`：专用服务替换；`plugins.py`：旧进程插件。
+- `runtime.py`：Hub 组装与调度；`execution/`：Agent 循环、上下文、单次模型调用；`tools.py`：工具调用、审批及恢复；`goals.py`：目标检查和流程修订；`scheduling.py`：触发器。
+- `models/registry.py`、`models/http.py`、`models/streaming.py`：模型注册、HTTP 协议与流式增量；`http_tools.py`、`openapi_tools.py`、`search.py`：声明式 API 与搜索。
+- `extensions/`：宿主、包校验和模型贡献；`extension_contracts.py`、`extension_process.py`：协议与执行进程；`backends.py`：专用服务替换；`plugins.py`：旧进程插件。
 - `skills.py`、`skill_packages.py`、`mcp_bridge.py`、`mcp_manager.py`：技巧资源与 MCP；`sessions.py`、`delegation.py`：会话与子 Agent。
 - `development.py`、`code_development.py`、`evolution.py`、`learning.py`：运行时定义、代码候选、策略评估与经验。
 - `connections.py`、`system_notifications.py`、`gateway.py`、`voice.py`：凭证、消息、通知及语音；`operations.py`：诊断/备份。
@@ -211,7 +213,7 @@ uv run --extra app easyagent studio --port 8770 --database .eah/configured.db --
 
 通用启动器不会看到 `OPENAI_API_KEY` 就自动创建连接。它读取 `--config` 中指定的凭证引用，或恢复设置中保存的连接。`OPENAI_BASE_URL/OPENAI_API_KEY/TYPESAFE_API_KEY/TINYFISH_API_KEY` 用于指定的 live demo；所需变量以 demo 的 `--help` 和源文件为准。
 
-自定义 Provider 实现 `async generate(request: ModelRequest, model: str) -> ModelResult`，用 `hub.models.register(alias, provider, model_id, capabilities, ...)` 注册。返回 text/data/tool_calls/images/embeddings 和真实 usage。`decision` 是结构化决策能力，不强制某类模型身份。原生文本流由 `model_streaming.py` 处理；缺少结束标识的中断不能当作完整结果。
+自定义 Provider 实现 `async generate(request: ModelRequest, model: str) -> ModelResult`，用 `hub.models.register(alias, provider, model_id, capabilities, ...)` 注册。返回 text/data/tool_calls/images/embeddings 和真实 usage。`decision` 是结构化决策能力，不强制某类模型身份。原生文本流由 `models/streaming.py` 处理；缺少结束标识的中断不能当作完整结果。
 
 图像/音视频原生协议可用目录中的 HTTP 节点，不强制塞入统一文本方法。提交与状态查询分开；`Polling` 声明 pending/succeeded/failed、间隔、次数、截止时间。媒体产物引用仅在出站时展开，不在工作流内保存大段 base64。完整模型目录是协议快照，不是全模型在线成功清单。
 
@@ -348,7 +350,7 @@ Agent 的 `development` 授权限定可写命名空间、域名、凭证引用�
 
 前端是原生 HTML/CSS/ES modules，无 npm 打包环节。Schema 驱动工具、扩展设置和命令表单；复杂 JSON 仅放高级入口。新能力应同时可被 API/SDK、画布和零代码构建发现，避免复制三个互不一致的实现。
 
-对话办事由 `workspace_chat.py`、`attachments.py` 和 `apps/agent/src/easyagent_app/static/workspace-chat.js` 实现，复用会话、版本化工作流、运行器和产物。`POST /v1/conversations` 传 `workspace: true` 创建办事会话，模型默认 `auto`；`POST /v1/conversations/{id}/messages` 使用 `ConversationInput` 的 `text`、`attachments`（artifact ID 数组）、`intent`（auto/create/workflow/chat）、`workflow`（id@revision）和 `idempotency_key`。先把原始文件上传至 `/v1/artifacts/upload?name=...`，再发送 ID；勿把 base64 内嵌到持久化流程。
+对话办事由 `workspace_chat/controller.py`、`attachments.py` 和 `apps/agent/src/easyagent_app/static/workspace-chat.js` 实现，复用会话、版本化工作流、运行器和产物。`POST /v1/conversations` 传 `workspace: true` 创建办事会话，模型默认 `auto`；`POST /v1/conversations/{id}/messages` 使用 `ConversationInput` 的 `text`、`attachments`（artifact ID 数组）、`intent`（auto/create/workflow/chat）、`workflow`（id@revision）和 `idempotency_key`。先把原始文件上传至 `/v1/artifacts/upload?name=...`，再发送 ID；勿把 base64 内嵌到持久化流程。
 
 `GET /v1/conversations/workflow-catalog` 提供流程用途、固定版本和业务输入 Schema；可设置工作流 `metadata.chat_enabled=false` 排除自动匹配。优先声明 `metadata.input_schema`，否则按 `$input` 引用推导字段。`DispatchDecision` 匹配结果不能改流程或授权，置信度低于 0.82 先澄清；输入在执行前按 Schema 校验。目录最多自动比较 100 项，完整路由上下文最多 180000 字符，超限需指定流程或拆分材料。
 

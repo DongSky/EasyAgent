@@ -2,7 +2,7 @@
 
 **简体中文** | [English](SDK_GUIDE.en.md)
 
-第一次使用请先完成[关键词搜索到生图教程](GETTING_STARTED.zh-CN.md)，本文作为接口和进阶用法参考。
+第一次使用请先运行[离线最小示例](FIRST_STEPS.zh-CN.md)，再学习[搜索到生图](GETTING_STARTED.zh-CN.md)。本文作为接口和进阶用法参考。
 
 普通脚本直接使用 `easyagent`。远程调用使用独立的 `easyagent_client`。
 浏览器应用是第三个包 `easyagent-app`，通过同一 HTTP API 连接后端。

@@ -2,7 +2,7 @@
 
 [简体中文](SDK_GUIDE.zh-CN.md) | **English**
 
-Start with [keyword research to image generation](GETTING_STARTED.en.md); use this page as the API and advanced usage reference.
+Start with the [offline first example](FIRST_STEPS.en.md), then [keyword research to image generation](GETTING_STARTED.en.md); use this page as the API and advanced usage reference.
 
 Use `easyagent` in local scripts and `easyagent_client` for remote calls.
 The browser application is a third package, `easyagent-app`, connected through the same HTTP API.

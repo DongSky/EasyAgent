@@ -75,7 +75,7 @@ Model and parameter support depends on the upstream service. See the [model and 
 
 ## Choose an entry point
 
-For **Python scripts or terminal usage**, start with [keyword research to image generation](docs/GETTING_STARTED.en.md); no server is needed. For the **browser canvas**, follow the Studio instructions below. The App is a separate package connected to the same backend runtime.
+For **Python scripts or terminal usage**, start with the [offline minimal example](docs/FIRST_STEPS.en.md). To change the framework, follow the [source reading route](docs/CODE_MAP.en.md). For the **browser canvas**, follow the Studio instructions below. The App is a separate package connected to the same backend runtime.
 
 ## Quick start
 

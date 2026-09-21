@@ -3,124 +3,24 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import copy
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import sys
 import time
 import uuid
 
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from jsonschema import validate
 
-from .components import digest, local_platform
-from .contracts import ModelResult
-from .extension_contracts import ExtensionInstall, ExtensionManifest, ExtensionPackage
-from .plugins import bounded_read
-from .store import Conflict, encode
+from ..components import local_platform
+from ..extension_contracts import ExtensionInstall, ExtensionPackage
+from ..plugins import bounded_read
+from ..store import Conflict, encode
 
 
-def build_package(manifest, files, *, publisher=None, signing_key=None):
-    body = {
-        "format": "easyagent.extension.v1",
-        "manifest": ExtensionManifest.model_validate(manifest).model_dump(),
-        "files": files,
-        "publisher": publisher,
-    }
-    checksum = digest(body)
-    signature = base64.b64encode(signing_key.sign(checksum.encode())).decode() if signing_key else None
-    return ExtensionPackage(**body, digest=checksum, signature=signature)
-
-
-def validate_package(raw, publishers):
-    package = ExtensionPackage.model_validate(raw)
-    if digest(package.model_dump(exclude={"digest", "signature"})) != package.digest:
-        raise ValueError("extension package digest mismatch")
-    if len(package.model_dump_json().encode()) > 1_500_000 or len(package.files) > 100:
-        raise ValueError("extension package exceeds size/file limit")
-    for name, content in package.files.items():
-        path = PurePosixPath(name)
-        if (
-            path.is_absolute()
-            or ".." in path.parts
-            or "\\" in name
-            or ":" in name
-            or str(path) != name
-            or not name
-            or "\x00" in content
-        ):
-            raise ValueError("extension files must be portable relative text paths")
-    manifest = package.manifest
-    if manifest.entrypoint not in package.files:
-        raise ValueError("extension entrypoint missing")
-    for view in manifest.views:
-        if view.entrypoint and view.entrypoint not in package.files:
-            raise ValueError("UI entrypoint missing")
-    for name, value in manifest.lock.items():
-        if name not in package.files or digest(package.files[name]) != value:
-            raise ValueError("dependency lock/file digest mismatch")
-    if package.signature:
-        if not package.publisher or package.publisher not in publishers:
-            raise PermissionError("unknown extension publisher")
-        try:
-            Ed25519PublicKey.from_public_bytes(base64.b64decode(publishers[package.publisher])).verify(
-                base64.b64decode(package.signature), package.digest.encode()
-            )
-        except Exception as exc:
-            raise PermissionError("invalid extension signature") from exc
-    return package
-
-
-class ExtensionProvider:
-    def __init__(self, host, package, contribution):
-        self.host, self.package, self.contribution = host, package, contribution
-
-    async def generate(self, request, model):
-        if self.contribution.stream_handler:
-            from .model_streaming import MODEL_OBSERVER
-
-            cursor = None
-            total = 0
-            try:
-                for _ in range(4096):
-                    page = await self.host.call(
-                        self.package,
-                        self.contribution.stream_handler,
-                        {
-                            "request": request.model_dump() if cursor is None else None,
-                            "model": model,
-                            "cursor": cursor,
-                        },
-                    )
-                    if not isinstance(page, dict):
-                        raise ValueError("invalid model stream page")
-                    total += len(encode(page).encode())
-                    if total > 4_000_000:
-                        raise ValueError("model stream exceeds byte limit")
-                    for delta in page.get("deltas", []):
-                        if not isinstance(delta, dict) or delta.get("type") not in (
-                            "text_delta",
-                            "tool_delta",
-                            "usage",
-                        ):
-                            raise ValueError("invalid model delta")
-                        if observer := MODEL_OBSERVER.get():
-                            await observer(delta)
-                    if page.get("done"):
-                        return ModelResult.model_validate(page["result"])
-                    cursor = page.get("cursor")
-                    if not isinstance(cursor, str) or not cursor:
-                        raise ValueError("model stream missing continuation cursor")
-                raise ValueError("model stream did not finish")
-            finally:
-                if cursor and self.contribution.cancel_handler:
-                    await self.host.call(self.package, self.contribution.cancel_handler, {"cursor": cursor})
-        result = await self.host.call(
-            self.package, self.contribution.handler, {"request": request.model_dump(), "model": model}
-        )
-        return ModelResult.model_validate(result)
+from .package import validate_package
+from .provider import ExtensionProvider
 
 
 class ExtensionHost:
@@ -299,7 +199,7 @@ class ExtensionHost:
 
             self.owners[action.spec.name] = m.id
             self.hub.tools.versions[action.spec.name, m.revision] = (action.spec, handler)
-        from .models import ModelBinding
+        from ..models import ModelBinding
 
         for provider in m.providers:
             self.owners[provider.alias] = m.id
@@ -355,7 +255,9 @@ class ExtensionHost:
             return await self._disable(name)
 
     async def _disable(self, name):
-        if hasattr(self.hub,"backends") and any(b["extension"]==name for b in self.hub.backends.snapshot().values()):
+        if hasattr(self.hub, "backends") and any(
+            b["extension"] == name for b in self.hub.backends.snapshot().values()
+        ):
             raise Conflict("select another backend before disabling this extension")
         for other, rev in self.active.items():
             if name in self.packages[other, rev].manifest.dependencies:
@@ -549,10 +451,32 @@ class ExtensionHost:
         env = {
             k: v
             for k, v in os.environ.items()
-            if k.upper() in {"PATH", "SYSTEMROOT", "WINDIR", "LANG", "TEMP", "TMP", "HOME", "USERPROFILE",
-                     "APPDATA", "LOCALAPPDATA", "CARGO_HOME", "RUSTUP_HOME", "LIB", "LIBPATH", "INCLUDE",
-                     "VSCMD_ARG_TGT_ARCH", "VCTOOLSINSTALLDIR", "VSINSTALLDIR", "VCINSTALLDIR",
-                     "WINDOWSSDKDIR", "WINDOWSSDKVERSION", "UNIVERSALCRTSDKDIR", "UCRTVERSION"}
+            if k.upper()
+            in {
+                "PATH",
+                "SYSTEMROOT",
+                "WINDIR",
+                "LANG",
+                "TEMP",
+                "TMP",
+                "HOME",
+                "USERPROFILE",
+                "APPDATA",
+                "LOCALAPPDATA",
+                "CARGO_HOME",
+                "RUSTUP_HOME",
+                "LIB",
+                "LIBPATH",
+                "INCLUDE",
+                "VSCMD_ARG_TGT_ARCH",
+                "VCTOOLSINSTALLDIR",
+                "VSINSTALLDIR",
+                "VCINSTALLDIR",
+                "WINDOWSSDKDIR",
+                "WINDOWSSDKVERSION",
+                "UNIVERSALCRTSDKDIR",
+                "UCRTVERSION",
+            }
             or k in m.env_allow
         }
         if m.runtime in ("javascript", "wasm"):
@@ -596,7 +520,7 @@ class ExtensionHost:
                     m.entrypoint,
                 ]
             payload = request
-        from .extension_process import PersistentWorker, terminate
+        from ..extension_process import PersistentWorker, terminate
 
         process, readers = None, []
         try:
@@ -626,10 +550,14 @@ class ExtensionHost:
                 if process.returncode:
                     # Pure workers have no credentials or host access. Their bounded traceback
                     # gives generated-code repair the actual syntax/runtime error.
-                    detail = ': ' + stderr.decode('utf-8', errors='replace')[-2000:] if m.runtime in ('javascript', 'wasm') else ''
+                    detail = (
+                        ": " + stderr.decode("utf-8", errors="replace")[-2000:]
+                        if m.runtime in ("javascript", "wasm")
+                        else ""
+                    )
                     raise ValueError(f"extension {m.id} handler failed (exit {process.returncode})" + detail)
                 response = json.loads(output)
-            from .extension_contracts import ExtensionResponse
+            from ..extension_contracts import ExtensionResponse
 
             ExtensionResponse.model_validate(response)
             if response.get("error"):

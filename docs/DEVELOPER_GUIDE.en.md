@@ -1,12 +1,14 @@
 # EasyAgent Developer Guide
 
+Start with the [offline minimal example](FIRST_STEPS.en.md), requiring no model or API key. Follow the [source reading route](CODE_MAP.en.md) when changing the framework.
+
 [中文](DEVELOPER_GUIDE.zh-CN.md) · **English** · [Project overview](../README.en.md) · [User guide](USER_GUIDE.en.md) · [Documentation index](README.en.md)
 
 Baseline: 0.1.0 / September 20, 2026. For SDK integration, node/extension development, platform adapters, and framework maintenance. Run commands from the repository root. These are development-preview interfaces; 0.x does not promise ABI stability across versions.
 
 ## Start here
 
-Read [keyword research to image generation](GETTING_STARTED.en.md), covering multiple inputs, branches and joins, then the [local SDK and CLI guide](SDK_GUIDE.en.md). This document is a reference for framework and extension development. The full toolchain below is needed for framework integration tests, not for using the SDK.
+Run the [offline first example](FIRST_STEPS.en.md), then read [keyword research to image generation](GETTING_STARTED.en.md), covering multiple inputs, branches and joins, then the [local SDK and CLI guide](SDK_GUIDE.en.md). This document is a reference for framework and extension development. The full toolchain below is needed for framework integration tests, not for using the SDK.
 
 A **node** is one operation whose implementation can combine ordinary code. A **workflow** connects nodes. A **subworkflow** retains its own graph and child run. `Module` organizes graph construction; `Subflow` explicitly creates the child boundary.
 
@@ -50,9 +52,9 @@ The desktop data directory is `EasyAgent`, with no lookup or fallback to another
 ## Source map and architecture
 
 - `src/easyagent/contracts.py`: strict Pydantic contracts and graph/schema validation. `store.py`: SQLite transactions and durable records.
-- `runtime.py`, `tools.py`: scheduling, execution, tool calls, approvals, and recovery. `goals.py`: output verification and plan revisions. `scheduling.py`: triggers.
-- `models.py`, `model_streaming.py`: model registry, protocols, and streaming deltas. `http_tools.py`, `openapi_tools.py`, `search.py`: declarative APIs and search.
-- `extensions.py`, `extension_contracts.py`, `extension_process.py`: packages, contributions, and processes. `backends.py`: service replacement. `plugins.py`: legacy process plugins.
+- `runtime.py`: Hub assembly and scheduling. `execution/`: agent turns, context, and individual model requests. `tools.py`: tool calls, approvals, and recovery. `goals.py`: output verification and plan revisions. `scheduling.py`: triggers.
+- `models/registry.py`, `models/http.py`, `models/streaming.py`: registry, HTTP protocols, and streaming deltas. `http_tools.py`, `openapi_tools.py`, `search.py`: declarative APIs and search.
+- `extensions/`: host, package validation, and model contributions. `extension_contracts.py`, `extension_process.py`: protocols and processes. `backends.py`: service replacement. `plugins.py`: legacy process plugins.
 - `skills.py`, `skill_packages.py`, `mcp_bridge.py`, `mcp_manager.py`: skill resources and MCP. `sessions.py`, `delegation.py`: conversations and child agents.
 - `development.py`, `code_development.py`, `evolution.py`, `learning.py`: runtime definitions, code candidates, policy evaluation, and learning.
 - `connections.py`, `system_notifications.py`, `gateway.py`, `voice.py`: credentials, messaging, notifications, and voice. `operations.py`: diagnostics/backups.
@@ -211,7 +213,7 @@ The placeholder endpoint is not callable. Avoid registering a configuration alia
 
 The generic launcher does not create a connection merely because `OPENAI_API_KEY` exists. It reads references in `--config` or restores saved Settings connections. `OPENAI_BASE_URL/OPENAI_API_KEY/TYPESAFE_API_KEY/TINYFISH_API_KEY` are used by specific live demos; inspect their `--help` and source for requirements.
 
-Custom providers implement `async generate(request: ModelRequest, model: str) -> ModelResult`, registered through `hub.models.register(alias, provider, model_id, capabilities, ...)`. Return appropriate text/data/tool_calls/images/embeddings and actual usage. `decision` is a structured-decision capability, not a required model identity. Standard text streaming is handled by `model_streaming.py`; an interrupted stream without its ending marker is not a complete result.
+Custom providers implement `async generate(request: ModelRequest, model: str) -> ModelResult`, registered through `hub.models.register(alias, provider, model_id, capabilities, ...)`. Return appropriate text/data/tool_calls/images/embeddings and actual usage. `decision` is a structured-decision capability, not a required model identity. Standard text streaming is handled by `models/streaming.py`; an interrupted stream without its ending marker is not a complete result.
 
 Native image/audio/video protocols can use catalog HTTP nodes instead of being forced into text generation. Separate submission and status polling. `Polling` declares pending/succeeded/failed values, interval, count, and deadline. Expand media references only on outbound requests rather than embedding large base64 payloads in workflows. The catalog is a protocol snapshot, not a list of live-tested models.
 
@@ -348,7 +350,7 @@ Use [life_assistant/app.py](../examples/life_assistant/app.py) as the domain pat
 
 The frontend uses native HTML/CSS/ES modules without npm bundling. Tool, extension-setting, and command forms are schema-generated; complex JSON belongs in advanced controls. Expose a capability through the shared API/SDK, canvas, and natural-language catalog rather than creating three separate implementations.
 
-The chat workspace uses `workspace_chat.py`, `attachments.py`, and `apps/agent/src/easyagent_app/static/workspace-chat.js`, reusing conversations, versioned workflows, the runtime, and artifacts. Create a workspace with `POST /v1/conversations` and `workspace: true`; the model defaults to `auto`. Send messages to `POST /v1/conversations/{id}/messages` using `ConversationInput`: `text`, `attachments` (artifact IDs), `intent` (auto/create/workflow/chat), `workflow` (id@revision), and `idempotency_key`. Upload raw files to `/v1/artifacts/upload?name=...` first, then submit their IDs instead of embedding base64 in persisted workflows.
+The chat workspace uses `workspace_chat/controller.py`, `attachments.py`, and `apps/agent/src/easyagent_app/static/workspace-chat.js`, reusing conversations, versioned workflows, the runtime, and artifacts. Create a workspace with `POST /v1/conversations` and `workspace: true`; the model defaults to `auto`. Send messages to `POST /v1/conversations/{id}/messages` using `ConversationInput`: `text`, `attachments` (artifact IDs), `intent` (auto/create/workflow/chat), `workflow` (id@revision), and `idempotency_key`. Upload raw files to `/v1/artifacts/upload?name=...` first, then submit their IDs instead of embedding base64 in persisted workflows.
 
 `GET /v1/conversations/workflow-catalog` exposes purposes, pinned revisions, and business-input schemas. Set workflow `metadata.chat_enabled=false` to exclude it from matching. Prefer an explicit `metadata.input_schema`; otherwise fields are inferred from `$input` references. `DispatchDecision` cannot change workflows or grants, confidence below 0.82 requires clarification, and inputs are schema-validated before execution. Automatic routing compares up to 100 candidates and limits its complete context to 180,000 characters; larger requests require workflow selection or splitting the material.
 

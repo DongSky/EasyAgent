@@ -1,12 +1,125 @@
-export function voiceStudio({api,escape,flash,token}){
- const page=document.getElementById('agent-chat'),compose=page.querySelector('[data-compose]'),bar=document.createElement('div');bar.className='actions';bar.innerHTML='<button type=button data-record>语音输入</button><button type=button data-read>朗读最新回复</button><button type=button data-stop-audio>停止朗读</button><audio data-audio controls hidden></audio><span data-voice-status class=muted></span>';compose.before(bar);
- const status=bar.querySelector('[data-voice-status]');let recorder,stream,chunks=[],messages=[],audioUrl,recordTimer;
- const guard=fn=>async e=>{try{await fn(e)}catch(err){status.textContent=err.message;flash(err.message)}};
- window.addEventListener('eah:message',e=>{messages=e.detail.messages});
- async function wait(id){const deadline=Date.now()+120000;while(Date.now()<deadline){const r=await api('/v1/runs/'+id);if(r.status==='succeeded')return r.steps[0].output;if(['failed','cancelled','needs_attention','waiting_approval'].includes(r.status))throw Error('语音处理未完成，请到任务记录查看');await new Promise(r=>setTimeout(r,400))}throw Error('语音处理仍在继续，请查看任务记录')}
- bar.querySelector('[data-record]').onclick=guard(async()=>{if(recorder?.state==='recording'){recorder.stop();return}stream=await navigator.mediaDevices.getUserMedia({audio:true});chunks=[];recorder=new MediaRecorder(stream);recorder.ondataavailable=e=>chunks.push(e.data);recorder.onstop=async()=>{clearTimeout(recordTimer);stream.getTracks().forEach(t=>t.stop());bar.querySelector('[data-record]').textContent='语音输入';try{const blob=new Blob(chunks,{type:recorder.mimeType});if(blob.size>1000000)throw Error('录音过长，请分段输入');status.textContent='正在转写…';const bytes=new Uint8Array(await blob.arrayBuffer());let binary='';for(const byte of bytes)binary+=String.fromCharCode(byte);const run=await api('/v1/voice/input','POST',{data:btoa(binary),media_type:blob.type.split(';')[0]});const result=await wait(run.id);page.querySelector('[data-text]').value=result.text;status.textContent='已转写，可检查后发送'}catch(err){status.textContent=err.message}};recorder.start();recordTimer=setTimeout(()=>{if(recorder.state==='recording')recorder.stop()},60000);bar.querySelector('[data-record]').textContent='结束录音';status.textContent='正在录音，最长 60 秒'});
- bar.querySelector('[data-read]').onclick=guard(async()=>{const message=[...messages].reverse().find(m=>m.role==='assistant');if(!message)throw Error('还没有可以朗读的回复');status.textContent='正在生成语音…';const result=await wait((await api('/v1/voice/output','POST',{text:message.content.slice(0,12000)})).id);const response=await fetch(`/v1/artifacts/${result.artifact.id}/content`,{headers:token()?{Authorization:'Bearer '+token()}: {}});if(!response.ok)throw Error('语音下载失败');if(audioUrl)URL.revokeObjectURL(audioUrl);audioUrl=URL.createObjectURL(await response.blob());const audio=bar.querySelector('audio');audio.src=audioUrl;audio.hidden=false;await audio.play();status.textContent='正在朗读'});
- bar.querySelector('[data-stop-audio]').onclick=()=>{bar.querySelector('audio').pause();status.textContent='朗读已暂停'};
- const settings=document.createElement('details');settings.className='panel';settings.innerHTML='<summary>语音输入与朗读</summary><form><label>语音服务地址<input name=base_url type=url required placeholder="https://api.example.com/v1"></label><label>已保存的凭证<select name=credential><option value="">无需凭证</option></select></label><label>转写模型<input name=transcription_model value=whisper-1 required></label><label>朗读模型<input name=speech_model value=tts-1 required></label><label>音色<input name=voice value=alloy required></label><button>保存语音连接</button></form></details>';document.getElementById('connections').append(settings);
- settings.ontoggle=guard(async()=>{if(!settings.open)return;const [s,keys]=await Promise.all([api('/v1/voice/settings'),api('/v1/connections/credentials')]);const f=settings.querySelector('form');f.elements.credential.innerHTML='<option value="">无需凭证</option>'+keys.map(k=>`<option>${escape(k.name)}</option>`).join('');if(s)for(const [key,value] of Object.entries(s))if(f.elements[key])f.elements[key].value=value||''});settings.querySelector('form').onsubmit=guard(async e=>{e.preventDefault();const body=Object.fromEntries(new FormData(e.target));body.credential=body.credential||null;await api('/v1/voice/settings','PUT',body);flash('语音连接已保存')});
+export function voiceStudio({ api, escape, flash, token }) {
+  const page = document.getElementById('agent-chat'),
+    compose = page.querySelector('[data-compose]'),
+    bar = document.createElement('div');
+  bar.className = 'actions';
+  bar.innerHTML =
+    '<button type=button data-record>语音输入</button><button type=button data-read>朗读最新回复</button><button type=button data-stop-audio>停止朗读</button><audio data-audio controls hidden></audio><span data-voice-status class=muted></span>';
+  compose.before(bar);
+  const status = bar.querySelector('[data-voice-status]');
+  let recorder,
+    stream,
+    chunks = [],
+    messages = [],
+    audioUrl,
+    recordTimer;
+  const guard = (fn) => async (e) => {
+    try {
+      await fn(e);
+    } catch (err) {
+      status.textContent = err.message;
+      flash(err.message);
+    }
+  };
+  window.addEventListener('eah:message', (e) => {
+    messages = e.detail.messages;
+  });
+  async function wait(id) {
+    const deadline = Date.now() + 120000;
+    while (Date.now() < deadline) {
+      const r = await api('/v1/runs/' + id);
+      if (r.status === 'succeeded') return r.steps[0].output;
+      if (['failed', 'cancelled', 'needs_attention', 'waiting_approval'].includes(r.status))
+        throw Error('语音处理未完成，请到任务记录查看');
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    throw Error('语音处理仍在继续，请查看任务记录');
+  }
+  bar.querySelector('[data-record]').onclick = guard(async () => {
+    if (recorder?.state === 'recording') {
+      recorder.stop();
+      return;
+    }
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    chunks = [];
+    recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = (e) => chunks.push(e.data);
+    recorder.onstop = async () => {
+      clearTimeout(recordTimer);
+      stream.getTracks().forEach((t) => t.stop());
+      bar.querySelector('[data-record]').textContent = '语音输入';
+      try {
+        const blob = new Blob(chunks, { type: recorder.mimeType });
+        if (blob.size > 1000000) throw Error('录音过长，请分段输入');
+        status.textContent = '正在转写…';
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        let binary = '';
+        for (const byte of bytes) binary += String.fromCharCode(byte);
+        const run = await api('/v1/voice/input', 'POST', {
+          data: btoa(binary),
+          media_type: blob.type.split(';')[0],
+        });
+        const result = await wait(run.id);
+        page.querySelector('[data-text]').value = result.text;
+        status.textContent = '已转写，可检查后发送';
+      } catch (err) {
+        status.textContent = err.message;
+      }
+    };
+    recorder.start();
+    recordTimer = setTimeout(() => {
+      if (recorder.state === 'recording') recorder.stop();
+    }, 60000);
+    bar.querySelector('[data-record]').textContent = '结束录音';
+    status.textContent = '正在录音，最长 60 秒';
+  });
+  bar.querySelector('[data-read]').onclick = guard(async () => {
+    const message = [...messages].reverse().find((m) => m.role === 'assistant');
+    if (!message) throw Error('还没有可以朗读的回复');
+    status.textContent = '正在生成语音…';
+    const result = await wait(
+      (await api('/v1/voice/output', 'POST', { text: message.content.slice(0, 12000) })).id
+    );
+    const response = await fetch(`/v1/artifacts/${result.artifact.id}/content`, {
+      headers: token() ? { Authorization: 'Bearer ' + token() } : {},
+    });
+    if (!response.ok) throw Error('语音下载失败');
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    audioUrl = URL.createObjectURL(await response.blob());
+    const audio = bar.querySelector('audio');
+    audio.src = audioUrl;
+    audio.hidden = false;
+    await audio.play();
+    status.textContent = '正在朗读';
+  });
+  bar.querySelector('[data-stop-audio]').onclick = () => {
+    bar.querySelector('audio').pause();
+    status.textContent = '朗读已暂停';
+  };
+  const settings = document.createElement('details');
+  settings.className = 'panel';
+  settings.innerHTML =
+    '<summary>语音输入与朗读</summary><form><label>语音服务地址<input name=base_url type=url required placeholder="https://api.example.com/v1"></label><label>已保存的凭证<select name=credential><option value="">无需凭证</option></select></label><label>转写模型<input name=transcription_model value=whisper-1 required></label><label>朗读模型<input name=speech_model value=tts-1 required></label><label>音色<input name=voice value=alloy required></label><button>保存语音连接</button></form></details>';
+  document.getElementById('connections').append(settings);
+  settings.ontoggle = guard(async () => {
+    if (!settings.open) return;
+    const [s, keys] = await Promise.all([
+      api('/v1/voice/settings'),
+      api('/v1/connections/credentials'),
+    ]);
+    const f = settings.querySelector('form');
+    f.elements.credential.innerHTML =
+      '<option value="">无需凭证</option>' +
+      keys.map((k) => `<option>${escape(k.name)}</option>`).join('');
+    if (s)
+      for (const [key, value] of Object.entries(s))
+        if (f.elements[key]) f.elements[key].value = value || '';
+  });
+  settings.querySelector('form').onsubmit = guard(async (e) => {
+    e.preventDefault();
+    const body = Object.fromEntries(new FormData(e.target));
+    body.credential = body.credential || null;
+    await api('/v1/voice/settings', 'PUT', body);
+    flash('语音连接已保存');
+  });
 }

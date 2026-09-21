@@ -56,7 +56,7 @@ Agent 上下文默认自动识别，不再固定为 64,000 字符。系统读取
 - `build_capabilities.py`：绑定已有媒体接口、独立测试、修正代码、创建节点及 Skill。
 - `build_recovery.py`、`model_limits.py`：分段草稿恢复、服务窗口识别与运行中校准。
 - `capability_research.py`：有界搜索与公开文档读取；外部内容只作为不可信参考。
-- `workspace_chat.py`：把构建、执行、失败修正和继续执行连接到对话入口。
+- `workspace_chat/controller.py`：把构建、执行、失败修正和继续执行连接到对话入口。
 - `tests/integration/test_autonomous_build.py`：真实 HTTP 和隔离 JavaScript 执行的协议测试，包含修图文件传递、错误实现被测试捕获、重启复用、搜索适配和避免重复写入。测试使用明确的模型夹具，不把它们称为真实模型效果测试。
 
 实现参考了 [Hermes 的技能创建流程](https://github.com/NousResearch/hermes-agent/blob/main/agent/learn_prompt.py)、[技能管理工具](https://github.com/NousResearch/hermes-agent/blob/main/tools/skill_manager_tool.py)和[网页工具](https://github.com/NousResearch/hermes-agent/blob/main/tools/web_tools.py)的组织方式：工具发现、执行验证、保存过程经验。EasyAgent 的实现复用自身的持久化运行器，没有复制这些源码。

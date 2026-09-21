@@ -4,9 +4,11 @@
 
 ## Start here
 
+- **First code example**: [offline workflow](FIRST_STEPS.en.md), without API keys.
+- **Changing the framework**: [source reading route](CODE_MAP.en.md), from a message to tool results.
+
 - **Learn from a real task**: [keyword research to image generation](GETTING_STARTED.en.md), covering multiple inputs, branches, joins and terminal usage.
 - **Look up SDK usage**: [local SDK and CLI](SDK_GUIDE.en.md).
-
 
 - [Project overview](../README.en.md): learn what EasyAgent does and run your first workflow.
 - [User guide](USER_GUIDE.en.md): connect models, create assistants, inspect results, and handle failures.

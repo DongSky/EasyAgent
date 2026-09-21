@@ -4,9 +4,10 @@
 
 ## 从这里开始
 
+- **第一次写代码**：[离线最小示例](FIRST_STEPS.zh-CN.md)，无需 API Key。
+- **准备修改框架**：[源码阅读路线](CODE_MAP.zh-CN.md)，从一条消息追踪到工具结果。
 - **从真实任务学开发**：[关键词搜索 → 生图](GETTING_STARTED.zh-CN.md)，用参考图案例理解多输入、分叉、汇合与命令行。
 - **查 SDK 用法**：[本地 SDK 与 CLI](SDK_GUIDE.zh-CN.md)；[SDK / App 包边界](SDK_AND_APP.md)。
-
 
 - [项目介绍](../README.md)：了解 EasyAgent，启动第一个工作流。
 - [使用指南](USER_GUIDE.zh-CN.md)：连接模型、创建助手、查看结果和处理失败。

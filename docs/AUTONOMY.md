@@ -91,7 +91,7 @@ Studio「创建助手」直接调用编译工具，不走回合状态机。两�
 
 - `src/easyagent/autonomy.py`：设置、工具组、agent 步骤与系统提示、finalize、反思、新工具。
 - `src/easyagent/runtime.py`：`Hub.observed_invoke`、`Hub.autonomy`。
-- `src/easyagent/workspace_chat.py`：`begin_operator`、`complete_operator`、`steer`；`Phase` 类集中定义全部回合阶段及其 `LABELS` / `ACTIVE` / `TERMINAL` / `REPAIRABLE` 分类，并通过 `enrich()` 下发给前端，避免前端各写一份。
+- `src/easyagent/workspace_chat/controller.py`：`begin_operator`、`complete_operator`、`steer`；`workspace_chat/state.py` 中的 `Phase` 类集中定义全部回合阶段及其 `LABELS` / `ACTIVE` / `TERMINAL` / `REPAIRABLE` 分类，并通过 `enrich()` 下发给前端，避免前端各写一份。
 - `src/easyagent/api_binding.py`：`bind_api_definition`（命名空间、凭证只按同源绑定）与 `publish_api_node`，编译器与 Operator 共用。
 - `src/easyagent/code_nodes.py`：`save_code_nodes`，把发布的纯代码工具注册成节点库里的独立节点，天然幂等。
 - `src/easyagent/delegation.py`：子 agent 授权继承。

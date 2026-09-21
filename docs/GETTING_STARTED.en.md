@@ -1,5 +1,7 @@
 # From keyword research to a generated image
 
+Start with the [offline minimal example](FIRST_STEPS.en.md), requiring no model or API key. Follow the [source reading route](CODE_MAP.en.md) when changing the framework.
+
 [简体中文](GETTING_STARTED.zh-CN.md) | **English** · [SDK reference](SDK_GUIDE.en.md)
 
 Extend the project's reference-image generation example with research. Supply character keywords, your reference image and a requested style; receive an image, the actual source notes and the image prompt.
