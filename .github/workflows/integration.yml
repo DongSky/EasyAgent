@@ -29,7 +29,7 @@ jobs:
       - run: uv run --extra app --extra dev ruff check src sdk/python/src apps tests examples
       - run: cargo build --locked --manifest-path sdk/rust/Cargo.toml --examples
       - id: tests
-        run: uv run --extra app --extra dev pytest -v --capture=tee-sys --tb=short --durations=20 tests/integration --junitxml=.eah/ci/junit.xml
+        run: uv run --extra app --extra dev pytest -x -v --capture=tee-sys --tb=short --durations=20 tests/integration --junitxml=.eah/ci/junit.xml
       - name: Report test failures
         if: failure() && steps.tests.outcome == 'failure'
         shell: python

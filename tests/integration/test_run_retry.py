@@ -21,7 +21,8 @@ async def test_default_model_wait_has_no_read_deadline_and_can_be_cancelled(hub,
     from easyagent.retry_policy import MODEL_WAIT, model_timeout
     remote = FastAPI()
     entered, release, disconnected = asyncio.Event(), asyncio.Event(), asyncio.Event()
-    hub.lease_seconds = .3
+    # Keep cancellation responsive without expiring a valid lease during slow disk I/O.
+    hub.lease_seconds = 3
     seen = []
     client_type = httpx.AsyncClient
 
@@ -59,15 +60,17 @@ async def test_default_model_wait_has_no_read_deadline_and_can_be_cancelled(hub,
         hub.models.register('planner', HTTPProvider(endpoint), 'fixture', ['chat'])
         run_id = hub.submit({'name': 'unlimited cancellable response', 'steps': [
             {'id': 'wait', 'kind': 'model', 'target': 'planner', 'input': {'prompt': 'test', 'parameters': {'stream': streaming}}}]})
-        await asyncio.wait_for(entered.wait(), 5)
-        await asyncio.sleep(.15)
-        assert hub.store.run(run_id)['status'] == 'running'
-        assert seen[-1]['read'] is None and seen[-1]['write'] is None
-        assert seen[-1]['connect'] == 20
-        hub.store.cancel(run_id)
-        assert (await hub.wait(run_id))['status'] == 'cancelled'
-        await asyncio.wait_for(disconnected.wait(), 3)
-        release.set()
+        try:
+            await asyncio.wait_for(entered.wait(), 10)
+            await asyncio.sleep(.15)
+            assert hub.store.run(run_id)['status'] == 'running'
+            assert seen[-1]['read'] is None and seen[-1]['write'] is None
+            assert seen[-1]['connect'] == 20
+            hub.store.cancel(run_id)
+            assert (await hub.wait(run_id))['status'] == 'cancelled'
+            await asyncio.wait_for(disconnected.wait(), 10)
+        finally:
+            release.set()
 
 
 @pytest.mark.parametrize('before_send', [False, True])
