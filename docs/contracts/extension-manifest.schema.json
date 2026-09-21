@@ -259,6 +259,16 @@
           "default": true,
           "title": "Idempotent",
           "type": "boolean"
+        },
+        "execution_mode": {
+          "default": "auto",
+          "enum": [
+            "auto",
+            "sequential",
+            "parallel"
+          ],
+          "title": "Execution Mode",
+          "type": "string"
         }
       },
       "required": [

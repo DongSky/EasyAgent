@@ -8,6 +8,9 @@ export const toolLabels={
   'development.run_workflow':'运行可复用流程','development.call_api':'调用接口节点',
   'agents.spawn':'启动协作助手','agents.send':'给协作助手补充信息','agents.reply':'回复协作消息','agents.status':'查看协作进度',
   'agents.wait':'等待协作结果','agents.cancel':'停止协作助手',
+  'agents.parallel':'并行执行协作任务','agents.note':'记录协作发现','agents.notes':'读取协作发现','agents.broadcast':'发送协作消息',
+  'files.read':'读取文件','files.write':'写入文件','files.edit':'精确编辑文件','files.find':'查找文件','files.grep':'搜索文件内容',
+  'workflows.save':'保存可复用流程','workflows.run':'执行已保存流程','workflows.get':'读取流程定义','workflows.list':'查找已保存流程','workflows.schema':'查看流程与节点规范',
   'code.create':'生成代码节点','code.test':'验证代码节点','code.publish':'发布代码节点',
   'life.plan_template':'创建生活事务计划','life.capture_material':'整理生活事务材料','evidence.verify_report':'核对报告来源',
 };

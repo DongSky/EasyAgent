@@ -19,6 +19,7 @@ class ToolSpec(Contract):
     output_schema: Json = Field(default_factory=lambda: {"type": "object"})
     effect: Literal["read", "write", "local"] = "read"
     idempotent: bool = True
+    execution_mode: Literal["auto", "sequential", "parallel"] = "auto"
 
     @model_validator(mode="after")
     def schemas(self):
@@ -150,6 +151,8 @@ class ToolCall(Contract):
     id: str
     name: str
     arguments: Json
+    argument_error: str | None = None
+    raw_arguments: str | None = None
 
 
 class ModelRequest(Contract):
@@ -171,6 +174,8 @@ class ModelResult(Contract):
     images: list[Json] = Field(default_factory=list)
     embeddings: list[list[float]] = Field(default_factory=list)
     usage: Json = Field(default_factory=dict)
+    # Opaque provider continuation data, replayed only to the same model/protocol.
+    provider_state: Json = Field(default_factory=dict)
 
 
 class DevelopmentService(Contract):
@@ -207,6 +212,10 @@ class DelegationGrant(Contract):
     tools: list[str] = Field(default_factory=list)
     max_children: int = Field(default=8, ge=1, le=64)
     max_depth: int = Field(default=2, ge=1, le=8)
+    # Ceiling on children running at the same time. None means no limit of our own making.
+    # A parent that reaches it is suspended and resumes when a child finishes, rather than
+    # being told no: the difference between back-pressure and a wall.
+    max_active: int | None = Field(default=None, ge=1, le=64)
     allow_redelegate: bool = False
 
 
@@ -231,6 +240,8 @@ class AgentConfig(Contract):
     context_chars: int | None = Field(default=None, ge=4000, le=500000)
     forbidden_output: list[str] = Field(default_factory=list)
     streaming: bool = False
+    tool_concurrency: int = Field(default=4, ge=1, le=32)
+    tool_result_chars: int = Field(default=48000, ge=1000, le=200000)
     code_development: CodeDevelopmentGrant | None = None
     delegation: DelegationGrant | None = None
 

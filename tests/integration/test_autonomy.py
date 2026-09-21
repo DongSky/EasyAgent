@@ -97,6 +97,8 @@ async def test_operator_builds_node_saves_workflow_remembers_and_delegates(api, 
                                           'input': {'csv': {'$ref': '$input.message'}}}]}}),
         ('agents.spawn', {'goal': 'Double-check that Alice totals 5', 'model': 'planner', 'tools': ['web.read', 'code.create']}),
         lambda request, seen: ('agents.wait', {'id': seen[8]['id']}),
+        ('workflows.run', {'id': 'csv-totals', 'revision': 1,
+                           'inputs': {'message': 'customer,amount\nAlice,2\nAlice,3'}}),
     ], final=lambda request, seen: '已完成：Alice 合计 ' + str(seen[5]['totals']['Alice']) + '；流程已保存为 ' + seen[7]['key'],
        reflection={'memory_notes': [{'namespace': 'tasks', 'key': 'csv-approach', 'value': 'aggregate with the published node'}],
                    'skill': {'name': 'csv-totals', 'description': 'Sum CSV amounts per customer', 'body': '1. Publish the aggregate node.\n2. Save the workflow.\n3. Verify totals.'},
@@ -121,8 +123,8 @@ async def test_operator_builds_node_saves_workflow_remembers_and_delegates(api, 
         assert hub.store.memory_search('user', 'csv-format')[0]['value'] == 'customer,amount header'
         assert task['selected'] == {'key': 'csv-totals@1', 'id': 'csv-totals', 'revision': 1, 'title': 'CSV 汇总'}
         assert any(c['key'] == 'csv-totals@1' for c in hub.chat.public_catalog())
-        assert [c['status'] for c in run['children']] == ['succeeded'] and model.children
-        child = hub.store.run(run['children'][0]['id'])
+        assert [c['status'] for c in run['children']] == ['succeeded', 'succeeded'] and model.children
+        child = next(hub.store.run(c['id']) for c in run['children'] if hub.store.run(c['id'])['steps'][0]['id'] == 'agent')
         assert child['spec']['steps'][0]['input']['code_development'] == {'namespace': ns}
         record = hub.store.memory_search('tasks', run['id'])[0]['value']
         assert record['saved_workflows'] == ['csv-totals@1'] and record['published_code'] and 'code.publish' in record['tools']
@@ -213,6 +215,9 @@ async def test_steer_message_reaches_the_running_operator(hub):
     assert steered and done['turns'][0]['task']['phase'] == 'completed', done['turns']
     assert next(t for t in done['turns'] if t['id'] == extra['id'])['status'] == 'steered'
     assert done['messages'][-1]['content'] == '已按补充要求改成英文'
+    run = hub.store.run(done['turns'][0]['task']['run_id'])
+    pins = [json.loads(p) for p in run['steps'][0]['state']['pinned_requests']]
+    assert {'role': 'user', 'content': '另外，结果改成英文'} in pins
 
 
 async def test_ask_user_pauses_and_resumes_with_the_answer(api):

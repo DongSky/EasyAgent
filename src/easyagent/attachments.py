@@ -21,11 +21,14 @@ class Attachments:
         hub.models.attachment_loader = self.model_request
 
         async def read(args, ctx):
-            return self.read(args['artifact_id'])
+            return self.read(args['artifact_id'], args.get('offset', 0), args.get('limit', 12000))
 
         hub.tools.register(ToolSpec(
             name='attachments.read', description='Read an uploaded text, PDF or DOCX document by artifact_id. Media files return metadata; use model attachments for perception or a registered media API.',
-            input_schema={'type': 'object', 'properties': {'artifact_id': {'type': 'string'}}, 'required': ['artifact_id'], 'additionalProperties': False},
+            input_schema={'type': 'object', 'properties': {'artifact_id': {'type': 'string'},
+                'offset': {'type': 'integer', 'minimum': 0, 'description': 'Zero-based character offset; use next_offset to continue'},
+                'limit': {'type': 'integer', 'minimum': 1, 'maximum': TEXT_LIMIT, 'default': 12000}},
+                'required': ['artifact_id'], 'additionalProperties': False},
             output_schema={'type': 'object'},
         ), read)
         from .image_preparation import install
@@ -42,13 +45,13 @@ class Attachments:
         kind = mime.split('/')[0] if mime.split('/')[0] in ('image', 'audio', 'video') else 'document'
         return {**info, 'media_type': mime, 'kind': kind}
 
-    def read(self, identifier):
+    def read(self, identifier, offset=0, limit=TEXT_LIMIT):
         info = self.describe(identifier)
         _, data = self.hub.artifacts.get(identifier)
         suffix = PurePath(info['name']).suffix.lower()
         text = None
         if info['media_type'].startswith('text/') or suffix in ('.txt', '.md', '.csv', '.json', '.yaml', '.yml', '.log'):
-            text = data[:500_000].decode('utf-8-sig', errors='replace')
+            text = data.decode('utf-8-sig', errors='replace')
         elif info['media_type'] == 'application/pdf' or suffix == '.pdf':
             from pypdf import PdfReader
             reader = PdfReader(io.BytesIO(data))
@@ -67,8 +70,9 @@ class Attachments:
                     raise ValueError('文档解压后过大，请拆分后上传。')
                 root = ElementTree.fromstring(archive.read(entry))
             text = '\n'.join(''.join(p.itertext()) for p in root.iter('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p'))
-        return {**info, 'text': (text or '')[:TEXT_LIMIT], 'text_available': bool(text and text.strip()),
-                'truncated': text is not None and (len(text) > TEXT_LIMIT or (suffix in ('.txt', '.md', '.csv', '.json') and len(data) > 500_000)),
+        return {**info, 'text': (text or '')[offset:offset + limit], 'text_available': bool(text and text.strip()),
+                'offset': offset, 'next_offset': offset + limit if text and len(text) > offset + limit else None,
+                'truncated': text is not None and len(text) > offset + limit,
                 'note': '图片、音视频及扫描件需使用支持对应输入的模型或已连接的识别接口。' if not text else ''}
 
     def model_request(self, request, binding):

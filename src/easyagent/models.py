@@ -166,9 +166,23 @@ class HTTPProvider:
         return json.loads(body)
 
     @staticmethod
+    def tool_call(identifier, name, arguments):
+        try:
+            parsed = json.loads(arguments) if isinstance(arguments, str) else arguments
+            if not isinstance(parsed, dict):
+                raise ValueError("arguments must be an object")
+            return ToolCall(id=identifier, name=name, arguments=parsed)
+        except (ValueError, TypeError):
+            return ToolCall(id=identifier, name=name, arguments={},
+                            argument_error="Tool arguments must be a complete JSON object. Correct this call.",
+                            raw_arguments=arguments if isinstance(arguments, str) else json.dumps(arguments))
+
+    @staticmethod
     def wire_names(request):
         # Dots are permitted locally, but not by every provider's tool-name grammar.
-        mapping = {f"tool_{index}": tool.name for index, tool in enumerate(request.tools)}
+        names = list(dict.fromkeys([t.name for t in request.tools] + [
+            c["name"] for m in request.messages for c in m.get("tool_calls", [])]))
+        mapping = {f"tool_{index}": name for index, name in enumerate(names)}
         return mapping, {v: k for k, v in mapping.items()}
 
     async def generate(self, request, model):
@@ -204,16 +218,26 @@ class HTTPProvider:
         if self.dialect == "responses":
             items = []
             for m in messages:
+                saved = m.get("provider_state", {})
                 if m["role"] == "tool":
                     items.append({"type": "function_call_output", "call_id": m["tool_call_id"], "output": m["content"]})
+                elif saved.get("dialect") == "responses" and saved.get("model") == model:
+                    for original in saved["output"]:
+                        item = dict(original)
+                        if item.get("type") == "function_call":
+                            item["name"] = reverse[item["name"]]
+                        items.append(item)
                 elif m.get("tool_calls"):
+                    if m.get("content"):
+                        items.append({"role": m["role"], "content": m["content"]})
                     for tc in m["tool_calls"]:
                         items.append({"type": "function_call", "call_id": tc["id"],
-                                      "name": reverse[tc["name"]], "arguments": json.dumps(tc["arguments"])})
+                                      "name": reverse[tc["name"]], "arguments": tc.get("raw_arguments") or json.dumps(tc["arguments"])})
                 else:
                     items.append({"role": m["role"], "content": m["content"]})
             payload = {**request.parameters, "model": model, "input": items, "max_output_tokens": request.max_output_tokens,
                        "store": False}
+            payload.setdefault("include", ["reasoning.encrypted_content"])
             if request.tools:
                 payload["tools"] = [{"type": "function", "name": reverse[t.name], "description": t.description,
                                      "parameters": t.input_schema, "strict": False} for t in request.tools]
@@ -227,19 +251,24 @@ class HTTPProvider:
             calls, text = [], []
             for item in data.get("output", []):
                 if item["type"] == "function_call":
-                    calls.append(ToolCall(id=item["call_id"], name=forward.get(item["name"], item["name"]),
-                                          arguments=json.loads(item["arguments"])))
+                    calls.append(self.tool_call(item["call_id"], forward.get(item["name"], item["name"]), item["arguments"]))
                 elif item["type"] == "message":
                     text.extend(c["text"] for c in item["content"] if c["type"] == "output_text")
-            return ModelResult(text="\n".join(text), tool_calls=calls, usage=data.get("usage", {}))
+            continuation = [{**item, "name": forward.get(item["name"], item["name"])}
+                            if item.get("type") == "function_call" else item for item in data.get("output", [])]
+            return ModelResult(text="\n".join(text), tool_calls=calls, usage=data.get("usage", {}),
+                               provider_state={"dialect": "responses", "model": model, "output": continuation} if calls else {})
         if self.dialect == "anthropic":
             return await self.anthropic(request, model, messages, forward, reverse)
         wire = []
         for m in messages:
             item = {k: v for k, v in m.items() if k in ("role", "content", "tool_call_id")}
+            saved = m.get("provider_state", {})
+            if saved.get("dialect") == "chat" and saved.get("model") == model:
+                item.update(saved.get("continuation", {}))
             if m.get("tool_calls"):
                 item["tool_calls"] = [{"id": c["id"], "type": "function", "function": {
-                    "name": reverse[c["name"]], "arguments": json.dumps(c["arguments"])}} for c in m["tool_calls"]]
+                    "name": reverse[c["name"]], "arguments": c.get("raw_arguments") or json.dumps(c["arguments"])}} for c in m["tool_calls"]]
             wire.append(item)
         payload = {**request.parameters, "model": model, "messages": wire, "max_tokens": request.max_output_tokens}
         if request.tools:
@@ -252,9 +281,11 @@ class HTTPProvider:
         if data["choices"][0].get("finish_reason") == "length":
             raise ModelResponseError('length')
         result = data["choices"][0]["message"]
-        return ModelResult(text=result.get("content") or "", usage=data.get("usage", {}), tool_calls=[
-            ToolCall(id=c["id"], name=forward.get(c["function"]["name"], c["function"]["name"]),
-                     arguments=json.loads(c["function"]["arguments"])) for c in result.get("tool_calls", [])])
+        continuation = {k: result[k] for k in ("reasoning_content", "reasoning_details") if k in result}
+        return ModelResult(text=result.get("content") or "", usage=data.get("usage", {}),
+            provider_state={"dialect": "chat", "model": model, "continuation": continuation} if continuation else {}, tool_calls=[
+            self.tool_call(c["id"], forward.get(c["function"]["name"], c["function"]["name"]),
+                           c["function"]["arguments"]) for c in result.get("tool_calls", [])])
 
     async def anthropic(self, request, model, messages, forward, reverse):
         system = "\n".join(m["content"] for m in messages if m["role"] == "system")
@@ -265,11 +296,16 @@ class HTTPProvider:
             if m["role"] == "system":
                 continue
             role = m["role"]
+            saved = m.get("provider_state", {})
             if role == "tool":
                 role = "user"
                 content = [{"type": "tool_result", "tool_use_id": m["tool_call_id"], "content": m["content"]}]
+            elif saved.get("dialect") == "anthropic" and saved.get("model") == model:
+                content = [{**c, "name": reverse[c["name"]]} if c["type"] == "tool_use" else dict(c)
+                           for c in saved["content"]]
             elif m.get("tool_calls"):
-                content = [{"type": "tool_use", "id": c["id"], "name": reverse[c["name"]], "input": c["arguments"]}
+                content = ([{"type": "text", "text": m["content"]}] if m.get("content") else [])
+                content += [{"type": "tool_use", "id": c["id"], "name": reverse[c["name"]], "input": c["arguments"]}
                            for c in m["tool_calls"]]
             else:
                 content = m["content"] if isinstance(m["content"], list) else [{"type": "text", "text": m["content"]}]
@@ -285,5 +321,8 @@ class HTTPProvider:
         if data.get('stop_reason') == 'max_tokens':
             raise ModelResponseError('max_output_tokens')
         return ModelResult(text="\n".join(c["text"] for c in data["content"] if c["type"] == "text"),
-            tool_calls=[ToolCall(id=c["id"], name=forward.get(c["name"], c["name"]), arguments=c["input"])
+            provider_state={"dialect": "anthropic", "model": model, "content": [
+                {**c, "name": forward.get(c["name"], c["name"])} if c["type"] == "tool_use" else c
+                for c in data["content"]]} if any(c["type"] == "tool_use" for c in data["content"]) else {},
+            tool_calls=[self.tool_call(c["id"], forward.get(c["name"], c["name"]), c["input"])
                         for c in data["content"] if c["type"] == "tool_use"], usage=data.get("usage", {}))

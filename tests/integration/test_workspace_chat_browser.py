@@ -12,6 +12,45 @@ from easyagent.contracts import ToolSpec
 from easyagent.models import HTTPProvider
 
 
+async def test_operator_child_workflow_artifacts_are_downloadable_in_chat(api):
+    """UI wiring fixture only; real NL acceptance lives in live_agent_acceptance.py."""
+    from easyagent.contracts import ModelResult, ToolCall
+    url, hub = api
+    hub.autonomy.configure({"reflection": False})
+
+    class Operator:
+        async def generate(self, request, model):
+            count = sum(m["role"] == "tool" for m in request.messages)
+            if count == 0:
+                return ModelResult(tool_calls=[ToolCall(id="save", name="workflows.save", arguments={
+                    "id": "artifact-example", "workflow": {"name": "文件交付", "steps": [
+                        {"id": "first", "kind": "artifact", "input": {"name": "first.txt", "content": "first result"}},
+                        {"id": "second", "kind": "artifact", "input": {"name": "second.txt", "content": "second result"}}]}})])
+            if count == 1:
+                return ModelResult(tool_calls=[ToolCall(id="run", name="workflows.run", arguments={"id": "artifact-example"})])
+            return ModelResult(text="已保存两个文件，并验证工作流执行成功。")
+
+    hub.models.register("ui-fixture", Operator(), "fixture", ["chat", "decision"])
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch()
+        try:
+            page = await browser.new_page()
+            await page.goto(url + "/#conversations")
+            await page.locator("#conversations [data-destination]").select_option("create")
+            await page.locator("#workspaceMessage").fill("创建一个流程，交付两个文本文件。")
+            await page.locator("#conversations [data-send]").click()
+            await expect(page.locator(".chat-result-file")).to_have_count(2, timeout=20000)
+            await expect(page.locator("[data-children] summary")).to_contain_text("工作流 · 文件交付 · 已完成")
+            async with page.expect_download() as event:
+                await page.locator(".chat-result-file").filter(has_text="first.txt").locator("[data-download]").click()
+            download = await event.value
+            assert (await download.path()).read_text() == "first result"
+            await page.reload()
+            await expect(page.locator(".chat-result-file")).to_have_count(2, timeout=15000)
+        finally:
+            await browser.close()
+
+
 async def test_nested_wait_labels_show_the_actual_blocker(api):
     from easyagent.contracts import ModelResult
     url, hub = api

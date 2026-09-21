@@ -183,6 +183,20 @@
           "title": "Streaming",
           "type": "boolean"
         },
+        "tool_concurrency": {
+          "default": 4,
+          "maximum": 32,
+          "minimum": 1,
+          "title": "Tool Concurrency",
+          "type": "integer"
+        },
+        "tool_result_chars": {
+          "default": 48000,
+          "maximum": 200000,
+          "minimum": 1000,
+          "title": "Tool Result Chars",
+          "type": "integer"
+        },
         "code_development": {
           "anyOf": [
             {
@@ -257,6 +271,20 @@
           "minimum": 1,
           "title": "Max Depth",
           "type": "integer"
+        },
+        "max_active": {
+          "anyOf": [
+            {
+              "maximum": 64,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Active"
         },
         "allow_redelegate": {
           "default": false,

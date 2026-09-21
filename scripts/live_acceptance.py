@@ -1,8 +1,10 @@
-"""Live acceptance for the autonomous operator, against a real connected model.
+"""Live execution smoke traces for the autonomous operator.
 
 Offline integration tests use scripted fixtures and prove runtime behaviour; this script
-proves the real end-to-end path: a real model, the real search and media connections
-configured in the workspace, real files on disk. It is never run by CI.
+exercises a real model and the configured services. A succeeded run is NOT a verified
+deliverable. For browser-driven natural-language creation, new-node publication, workflow
+reuse and nested delegation with independent output checks, use live_agent_acceptance.py.
+Neither script is run by CI against a paid service.
 
     uv run python scripts/live_acceptance.py --model gpt --task all
     uv run python scripts/live_acceptance.py --task terminal --request "写一个脚本统计字符数"
@@ -147,6 +149,9 @@ async def run_task(hub, name, model, request, timeout, output):
     transcript['user_memory'] = [{'key': r['key'], 'value': r['value']}
                                  for r in hub.store.memory_search('user', limit=10)]
     transcript['skills'] = [s['name'] for s in hub.skills.catalog() if s['name'].startswith('learned-')]
+    transcript['acceptance'] = {'status': 'unverified', 'reason':
+        'This smoke runner records execution, but has no task-specific deliverable assertions. '
+        'Use scripts/live_agent_acceptance.py for verified workflow construction and orchestration.'}
     if task.get('reflection_run'):
         try:
             reflected = await hub.wait(task['reflection_run'], timeout=180)
@@ -157,7 +162,7 @@ async def run_task(hub, name, model, request, timeout, output):
 
     (output / f'{name}.json').write_text(
         json.dumps(transcript, ensure_ascii=False, indent=2), encoding='utf-8')
-    verdict = 'succeeded' if transcript.get('run_status') == 'succeeded' else 'FAILED'
+    verdict = 'runtime succeeded; deliverable unverified' if transcript.get('run_status') == 'succeeded' else 'FAILED'
     print(f'[{name}] {verdict}', flush=True)
     return transcript
 
@@ -193,7 +198,7 @@ async def main(args):
                       for name, r in results.items()}, ensure_ascii=False, indent=2), flush=True)
     print('evidence:', output, flush=True)
     (output / 'summary.json').write_text(
-        json.dumps({name: {'status': r.get('status'), 'run_status': r.get('run_status')}
+        json.dumps({name: {'status': r.get('status'), 'run_status': r.get('run_status'), 'acceptance': r['acceptance']}
                     for name, r in results.items()}, ensure_ascii=False, indent=2), encoding='utf-8')
     failed = [name for name, r in results.items() if r.get('run_status') != 'succeeded']
     if failed:

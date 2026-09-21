@@ -16,6 +16,30 @@
           "additionalProperties": true,
           "title": "Arguments",
           "type": "object"
+        },
+        "argument_error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Argument Error"
+        },
+        "raw_arguments": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Arguments"
         }
       },
       "required": [
@@ -66,6 +90,11 @@
     "usage": {
       "additionalProperties": true,
       "title": "Usage",
+      "type": "object"
+    },
+    "provider_state": {
+      "additionalProperties": true,
+      "title": "Provider State",
       "type": "object"
     }
   },

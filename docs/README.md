@@ -35,6 +35,7 @@
 - [Skills](SKILLS.md)
 - [运行时添加节点和流程](RUNTIME_DEVELOPMENT.md)
 - [自主执行架构（Operator）](AUTONOMY.md)
+- [Agent 工具、编排与真实自然语言验收修复](AGENT_EXECUTION_REPAIR.md)
 - [自动检查与修复](GOALS.md)
 - [搜索和自定义 API](SEARCH_AND_APIS.md)
 - [模型与媒体接口](MODEL_API_COMPATIBILITY.md)

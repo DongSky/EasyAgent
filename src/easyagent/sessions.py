@@ -326,7 +326,9 @@ class Conversations:
             if not rows:
                 return False
             for row in rows:
-                state["messages"].append({"role": "user", "content": row["text"]})
+                message = {"role": "user", "content": row["text"]}
+                state["messages"].append(message)
+                state.setdefault("pinned_requests", []).append(encode(message))
                 self.append(db, metadata["conversation"], row["id"], "user", row["text"])
                 db.execute(
                     "UPDATE conversation_turns SET status='steered',run_id=? WHERE id=?",

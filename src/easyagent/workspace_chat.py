@@ -427,6 +427,7 @@ Respond in the user's language. title is only used if creating a new workflow. F
         step = self.hub.autonomy.agent_step(conversation, turn, state, state['model'])
         flow = {'name': (turn['text'].strip().splitlines() or ['对话任务'])[0][:60] or '对话任务',
                 'metadata': {'conversation': conversation['id'], 'turn': turn['id'], 'operator': True,
+                             'require_workflow': state['request']['intent'] == 'create',
                              'workspace_conversation': conversation['id'], 'workspace_turn': turn['id'],
                              'step_labels': {'operator': '自主处理'}},
                 'steps': [step]}

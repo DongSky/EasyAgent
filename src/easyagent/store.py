@@ -196,7 +196,9 @@ class Store:
                 WHERE i.run_id IN (SELECT id FROM tree) AND
                 ((i.status='approval' AND s.status='waiting_approval') OR (i.status='uncertain' AND s.status='needs_attention'))""",
                 (run_id,))]
-            result["children"] = [dict(r) for r in db.execute("SELECT c.step_id,c.slot,r.id,r.name,r.status FROM child_runs c JOIN runs r ON r.id=c.child_id WHERE c.parent_id=? ORDER BY c.slot", (run_id,))]
+            result["children"] = [dict(r) for r in db.execute("SELECT c.step_id,c.slot,r.id,r.name,r.status, "
+                "CASE WHEN r.idempotency_key LIKE 'delegate:%' THEN 'agent' ELSE 'workflow' END AS kind "
+                "FROM child_runs c JOIN runs r ON r.id=c.child_id WHERE c.parent_id=? ORDER BY c.slot", (run_id,))]
             result["input_requests"] = [dict(r) | {"schema": json.loads(r["schema"])} for r in db.execute("""WITH RECURSIVE tree(id) AS
                 (SELECT ? UNION ALL SELECT c.child_id FROM child_runs c JOIN tree ON c.parent_id=tree.id)
                 SELECT q.* FROM input_requests q JOIN steps s ON q.run_id=s.run_id AND q.step_id=s.id

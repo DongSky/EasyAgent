@@ -7,7 +7,7 @@ MODEL_OBSERVER = ContextVar("eah_model_observer", default=None)
 
 
 async def fold_sse(response, dialect, max_bytes):
-    text, calls, blocks, usage = "", {}, {}, {}
+    text, calls, blocks, usage, continuation = "", {}, {}, {}, {}
     complete, final, finish = False, None, None
     total, lines = 0, []
 
@@ -22,6 +22,13 @@ async def fold_sse(response, dialect, max_bytes):
             kind = obj.get("type")
             if kind == "response.output_text.delta":
                 delta = obj.get("delta", "")
+            elif kind in ("response.output_item.added", "response.output_item.done"):
+                blocks[obj["output_index"]] = dict(obj["item"])
+            elif kind == "response.function_call_arguments.delta":
+                block = blocks[obj["output_index"]]
+                block["arguments"] = block.get("arguments", "") + obj.get("delta", "")
+            elif kind == "response.function_call_arguments.done":
+                blocks[obj["output_index"]]["arguments"] = obj["arguments"]
             elif kind == "response.completed":
                 final, complete = obj["response"], True
             elif kind in ("response.failed", "response.incomplete", "error"):
@@ -43,6 +50,10 @@ async def fold_sse(response, dialect, max_bytes):
                     block["text"] = block.get("text", "") + delta
                 elif value["type"] == "input_json_delta":
                     block["_json"] += value["partial_json"]
+                elif value["type"] == "thinking_delta":
+                    block["thinking"] = block.get("thinking", "") + value["thinking"]
+                elif value["type"] == "signature_delta":
+                    block["signature"] = block.get("signature", "") + value["signature"]
             elif kind == "message_delta":
                 usage.update(obj.get("usage", {}))
                 if obj.get("delta", {}).get("stop_reason") == "max_tokens":
@@ -58,6 +69,8 @@ async def fold_sse(response, dialect, max_bytes):
                 if choice.get("index", 0) != 0:
                     continue
                 value = choice.get("delta", {})
+                if value.get("reasoning_content"):
+                    continuation["reasoning_content"] = continuation.get("reasoning_content", "") + value["reasoning_content"]
                 delta += value.get("content") or ""
                 finish = choice.get("finish_reason") or finish
                 for call in value.get("tool_calls", []):
@@ -90,6 +103,8 @@ async def fold_sse(response, dialect, max_bytes):
     if dialect == "responses":
         if final is None:
             raise ValueError("Responses stream missing completed response")
+        if not final.get("output") and blocks:
+            final = {**final, "output": [blocks[i] for i in sorted(blocks)]}
         return final
     if dialect == "anthropic":
         content = []
@@ -101,7 +116,7 @@ async def fold_sse(response, dialect, max_bytes):
         return {"content": content, "usage": usage}
     return {
         "choices": [
-            {"message": {"content": text, "tool_calls": list(calls.values())}, "finish_reason": finish}
+            {"message": {"content": text, "tool_calls": [calls[i] for i in sorted(calls)], **continuation}, "finish_reason": finish}
         ],
         "usage": usage,
     }

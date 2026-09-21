@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -142,7 +143,7 @@ def _for_summary(messages):
         content = message.get("content")
         if message.get("role") == "tool" and isinstance(content, str) and len(content) > limit:
             content = content[:limit] + f"\n… [truncated {len(content) - limit} characters]"
-        bounded.append({**message, "content": content})
+        bounded.append({**{k: v for k, v in message.items() if k != "provider_state"}, "content": content})
     return bounded
 
 
@@ -231,6 +232,9 @@ class Hub:
         from .execution_backends import LocalExecution
 
         self.execution = LocalExecution(self)
+        from .workspace_files import install as install_workspace_files
+
+        install_workspace_files(self)
         from .voice import Voice
 
         self.voice = Voice(self)
@@ -271,6 +275,7 @@ class Hub:
             unavailable.add("backend.channel")
         if not settings.terminal_enabled:
             unavailable.update({"attachments.import_file", "attachments.export_file"})
+            unavailable.update(t["name"] for t in rows if t["name"].startswith("files."))
         return [t for t in rows if t["name"] not in unavailable]
 
     def submit(self, workflow: Workflow | dict, idempotency_key=None, parent=None, parent_job=None, *, execution='confirm'):
@@ -338,7 +343,8 @@ class Hub:
                         raise ValueError("unknown delegated model")
                     for name in grant.tools:
                         self.tools.spec(name)
-                    workflow.limits.child_runs = min(workflow.limits.child_runs, grant.max_children)
+                    # Grant limits apply to this node's delegated children. RunLimits is
+                    # the separate shared budget for the entire workflow tree.
                 elif any(name.startswith("agents.") for name in config.tools):
                     raise PermissionError("agent delegation tools require a grant")
                 if "skills.save" in config.tools and not config.skill_namespace:
@@ -744,26 +750,11 @@ class Hub:
         if config.strategy == "plan_execute":
             return await self.plan_execute(job, model, config, state, force_approval)
         while True:
+            await self.execute_pending(job, state, config, force_approval)
+            # A provider requires the complete tool-result group immediately after the calls.
+            # Steering/mailbox input is delivered at the next model boundary, never inside it.
             self.conversations.steer(job, state)
             self.delegation.receive(job, state)
-            while state["pending_index"] < len(state["pending"]):
-                index = state["pending_index"]
-                call = state["pending"][index]
-                # Count a logical call once, before its first execution, including approval pauses.
-                if not call.get("counted"):
-                    if config.max_tool_calls is not None and state["tool_count"] >= config.max_tool_calls:
-                        raise ValueError("agent tool-call budget exhausted")
-                    state["tool_count"] += 1
-                    call["counted"] = True
-                    self.store.checkpoint(job, state)
-                output = await self.observed_invoke(
-                    job, config, call["name"], call["arguments"], f"turn-{state['turns']}-tool-{index}", force_approval
-                )
-                state["messages"].append(
-                    {"role": "tool", "tool_call_id": call["id"], "content": encode(output)}
-                )
-                state["pending_index"] += 1
-                self.store.checkpoint(job, state)
             if config.max_turns is not None and state["turns"] >= config.max_turns:
                 raise ValueError("agent model-call budget exhausted")
             await self.compact_for_model(job, state, config, model)
@@ -788,10 +779,20 @@ class Hub:
                 if await self.recover_model_turn(job, state, config, model, exc):
                     continue
                 raise
+            state.pop("output_recoveries", None)
             if not result.tool_calls:
                 if any(term.casefold() in result.text.casefold() for term in config.forbidden_output):
                     raise PermissionError("output guard rejected a configured forbidden phrase")
                 if self.conversations.steer(job, state) or self.delegation.receive(job, state):
+                    continue
+                feedback = self.autonomy.completion_feedback(job)
+                if feedback:
+                    if state.get("completion_corrections", 0) >= 2:
+                        raise ValueError(feedback)
+                    state["completion_corrections"] = state.get("completion_corrections", 0) + 1
+                    state["messages"].extend([{"role": "assistant", "content": result.text},
+                                              {"role": "user", "content": feedback}])
+                    self.store.checkpoint(job, state)
                     continue
                 await self.extensions.dispatch(
                     "agent.end", {"text": result.text, "turns": state["turns"]}, job=job
@@ -800,9 +801,95 @@ class Hub:
             calls = [c.model_dump() for c in result.tool_calls]
             if len({c["id"] for c in calls}) != len(calls):
                 raise ValueError("model returned duplicate tool call ids")
-            state["messages"].append({"role": "assistant", "content": result.text, "tool_calls": calls})
+            state["messages"].append({"role": "assistant", "content": result.text, "tool_calls": calls,
+                                     **({"provider_state": result.provider_state} if result.provider_state else {})})
             state["pending"], state["pending_index"] = json.loads(encode(calls)), 0
             self.store.checkpoint(job, state)
+
+    async def execute_pending(self, job, state, config, force_approval):
+        """Checkpoint each result; read batches overlap, mutations form ordered barriers.
+
+        Paused calls keep their slot and completed siblings. No further model round-trip
+        occurs until every call has a matching result, including after a restart.
+        """
+        pending = state["pending"]
+
+        def parallel(call):
+            if force_approval or call["name"] not in config.tools:
+                return False
+            spec = self.tools.spec(call["name"], config.tool_revisions.get(call["name"]))
+            return spec.execution_mode == "parallel" or (spec.execution_mode == "auto" and spec.effect == "read")
+
+        async def execute(index):
+            call = pending[index]
+            if "observation" in call:
+                return
+            if not call.get("counted"):
+                if config.max_tool_calls is not None and state["tool_count"] >= config.max_tool_calls:
+                    raise ValueError("agent tool-call budget exhausted")
+                state["tool_count"] += 1
+                call["counted"] = True
+                self.store.checkpoint(job, state)
+            if call.get("argument_error"):
+                call["observation"] = tool_failure_observation(
+                    ToolInputError(call["argument_error"]), executed=False, code="invalid_tool_arguments")
+            else:
+                call["observation"] = await self.observed_invoke(
+                    job, config, call["name"], call["arguments"], f"turn-{state['turns']}-tool-{index}", force_approval)
+            serialized = encode(call["observation"])
+            call["observation_hash"] = hashlib.sha256(serialized.encode()).hexdigest()
+            if len(serialized) > config.tool_result_chars:
+                artifact = self.artifacts.put(f"tool-result-{state['turns']}-{index}.json", serialized,
+                                              "application/json", job["run_id"])
+                call["observation"] = {"truncated": True, "artifact": artifact,
+                    "preview": serialized[:config.tool_result_chars],
+                    "hint": "Full result is in the artifact. Read only relevant ranges with attachments.read."}
+            self.store.checkpoint(job, state)
+
+        while state["pending_index"] < len(pending):
+            start = state["pending_index"]
+            end = start + 1
+            if parallel(pending[start]):
+                while end < len(pending) and end - start < config.tool_concurrency and parallel(pending[end]):
+                    end += 1
+            tasks = [asyncio.create_task(execute(index)) for index in range(start, end)]
+            try:
+                outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+            finally:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+            errors = [r for r in outcomes if isinstance(r, BaseException)]
+            if errors:
+                # Surface actionable pauses before a child wait; otherwise an approval can
+                # never be answered because its containing step keeps entering waiting_children.
+                def priority(error):
+                    if isinstance(error, (LeaseLost, asyncio.CancelledError)):
+                        return -2
+                    for rank, kind in enumerate((LeaseLost, asyncio.CancelledError, UncertainEffect,
+                                                  ApprovalRequired, WaitingInput, WaitingRemote, WaitingChildren)):
+                        if isinstance(error, kind):
+                            return rank
+                    return -1
+                raise min(errors, key=priority)
+            for index in range(start, end):
+                call = pending[index]
+                state["messages"].append({"role": "tool", "tool_call_id": call["id"],
+                                          "content": encode(call["observation"])})
+            state["pending_index"] = end
+            self.store.checkpoint(job, state)
+        if pending and state.get("checked_turn") != state["turns"]:
+            fingerprint = encode([{k: c.get(k) for k in ("name", "arguments", "observation_hash")} for c in pending])
+            repeated = state.get("stalled_turns", 0) + 1 if fingerprint == state.get("last_observations") else 0
+            state.update(checked_turn=state["turns"], last_observations=fingerprint, stalled_turns=repeated)
+            if repeated == 2:
+                state["messages"].append({"role": "user", "content":
+                    "These identical tool calls returned the same results three times. Stop repeating them. "
+                    "Use agents.wait for child completion; otherwise change your approach or explain the blocker."})
+            self.store.checkpoint(job, state)
+            if repeated >= 3:
+                raise ValueError("agent made no progress: identical tool calls and results repeated four times")
 
     async def observed_invoke(self, job, config, name, arguments, slot, force_approval):
         """Run one model-requested tool call; failures return as observations the model can act on.
@@ -909,6 +996,8 @@ class Hub:
             kind = 'context_overflow'
         elif isinstance(exc, ModelResponseError) and exc.output_limited:
             count = state.get('output_recoveries', 0)
+            if count >= 2:
+                return False
             state['output_recoveries'] = count + 1
             state['messages'].append({'role': 'user', 'content':
                 'The previous response hit the output limit. None of its tool calls were executed. '
@@ -973,6 +1062,7 @@ class Hub:
         # historical assistant/tool groups, never orphan provider tool call ids, and never
         # drop a message the task depends on (pinned) or the newest turn's evidence.
         original = len(messages)
+        pinned = _protected(state, messages)
         start = _prefix_end(messages, pinned)
         while len(encode(messages)) > limit and start < len(messages):
             if start in pinned or messages[start].get("role") == "system":
@@ -987,6 +1077,7 @@ class Hub:
                 start = end
                 continue
             del messages[start:end]
+            pinned = _protected(state, messages)
             # The cursor does not move: the next message now occupies this index, and it may
             # itself be deletable. Advancing here is what keeps the loop from re-scanning.
         if len(encode(messages)) > limit:

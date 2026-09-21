@@ -71,7 +71,7 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
   function closeHistory(){$('.chat-history').classList.remove('mobile-open');$('[data-history-toggle]').setAttribute('aria-expanded','false');}
   $('[data-history-toggle]').onclick=()=>{const opened=$('.chat-history').classList.toggle('mobile-open');$('[data-history-toggle]').setAttribute('aria-expanded',String(opened));};
   page.addEventListener('keydown',e=>{if(e.key==='Escape')closeHistory();});
-  function clearCards(){for(const entry of cards.values()){stopWatch(entry.details);clearMedia(entry.media);}cards.clear();runCache.clear();$('[data-timeline]').replaceChildren();}
+  function clearCards(){for(const entry of cards.values()){stopWatch(entry.details);entry.root.querySelectorAll('[data-child-run]').forEach(stopWatch);clearMedia(entry.media);}cards.clear();runCache.clear();$('[data-timeline]').replaceChildren();}
   function persistDraft(){drafts.set(selected||'new',{text:$('[data-text]').value,files,destination:$('[data-destination]').value,execution:$('[data-execution]').value});}
   function restoreDraft(){const draft=drafts.get(selected||'new')||{text:'',files:[],destination:'auto'};$('[data-text]').value=draft.text;files=draft.files;$('[data-destination]').value=draft.destination;$('[data-execution]').value=draft.execution||'automatic';drawFiles();}
   function drawFiles(){
@@ -187,7 +187,7 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
   function ensureCard(turn){
     let entry=cards.get(turn.id);if(entry)return entry;
     const root=document.createElement('article');root.className='chat-turn';root.dataset.turn=turn.id;
-    root.innerHTML='<div class="chat-user-message"><small>你</small><div data-user></div><div class="chat-sent-files" data-sent-files></div></div><div class="chat-task-card"><div data-card-heading></div><div data-graph></div><div class="chat-activity" data-activity hidden></div><div data-choices class="chat-choices"></div><div class="chat-result-message" data-reply></div><div data-setup></div><div data-retry></div><div class="chat-result-media" data-media></div><div class="chat-task-actions"><button class="text-button" data-details-toggle aria-expanded="false">展开步骤与结果</button><button class="text-button" data-edit hidden>在画布中打开 ↗</button></div><div class="chat-task-details" data-details hidden></div></div>';
+    root.innerHTML='<div class="chat-user-message"><small>你</small><div data-user></div><div class="chat-sent-files" data-sent-files></div></div><div class="chat-task-card"><div data-card-heading></div><div data-graph></div><div data-children></div><div class="chat-activity" data-activity hidden></div><div data-choices class="chat-choices"></div><div class="chat-result-message" data-reply></div><div data-setup></div><div data-retry></div><div class="chat-result-media" data-media></div><div class="chat-task-actions"><button class="text-button" data-details-toggle aria-expanded="false">展开步骤与结果</button><button class="text-button" data-edit hidden>在画布中打开 ↗</button></div><div class="chat-task-details" data-details hidden></div></div>';
     entry={root,details:root.querySelector('[data-details]'),media:root.querySelector('[data-media]'),lastDetail:'',lastMedia:'',lastGraph:'',events:[],eventCursor:0,eventRun:null};cards.set(turn.id,entry);$('[data-timeline]').append(root);
     root.querySelector('[data-details-toggle]').onclick=guard(async e=>{entry.details.hidden=!entry.details.hidden;e.currentTarget.setAttribute('aria-expanded',String(!entry.details.hidden));e.currentTarget.textContent=entry.details.hidden?'展开步骤与结果':'收起步骤与结果';if(entry.details.hidden)stopWatch(entry.details);else if(entry.run)renderRun(entry.run,entry.details);});
     return entry;
@@ -211,7 +211,12 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
       const label=retryWaiting?'等待自动重试':active&&state.phase==='failed'?'正在继续处理':run&&['executing','working'].includes(state.phase)?(state.phase==='working'&&['queued','running'].includes(run.status)?'正在自主处理':statuses[run.status]||run.status):labels[state.phase]||'正在安排';
       const heading=`<div class="chat-task-heading"><span class="chat-task-mark ${active?'is-working':''}">${active?'✦':state.phase==='completed'?'✓':state.phase==='failed'?'!':'✦'}</span><div><b>${escape(title)}</b><p>${escape(label)}${state.selected?' · 固定版本 v'+state.selected.revision:''}</p></div>${run&&['executing','completed'].includes(state.phase)?`<span class="chat-step-count">${finished}/${run.steps.length}</span>`:''}</div>${state.reason?`<p class="chat-route-reason">${escape(state.reason)}</p>`:''}`;
       if(heading!==entry.lastHeading){entry.lastHeading=heading;find('[data-card-heading]').innerHTML=heading;}
-      if(run){updateGraph(entry,run);await updateActivity(entry,run);if(c.id!==selected)return;}
+      if(run){updateGraph(entry,run);await updateActivity(entry,run);if(c.id!==selected)return;
+        const children=find('[data-children]'),childKey=JSON.stringify(run.children||[]);
+        if(entry.childKey!==childKey){entry.childKey=childKey;children.querySelectorAll('[data-child-run]').forEach(stopWatch);children.innerHTML=(run.children||[]).length?'<p class="muted">流程执行与协作任务</p>'+(run.children||[]).map(child=>`<details data-child="${escape(child.id)}"><summary>${child.kind==='agent'?'协作助手':'工作流'} · ${escape(child.name)} · ${escape(statuses[child.status]||child.status)}</summary><div data-child-run></div></details>`).join(''):'';
+          children.querySelectorAll('[data-child]').forEach(detail=>detail.ontoggle=guard(async()=>{const body=detail.querySelector('[data-child-run]');if(detail.open){const child=await api('/v1/runs/'+detail.dataset.child);renderRun(child,body);}else stopWatch(body);}));
+        }
+      }
       const message=c.messages.filter(m=>m.turn_id===turn.id&&m.role==='assistant').at(-1);find('[data-reply]').innerHTML=formatChat(message?.content||(['clarification','failed','waiting_connections','superseded','steered'].includes(state.phase)?state.message:''),escape);
       find('[data-choices]').innerHTML=(state.choices||[]).map(choice=>`<button data-choice="${escape(choice.key)}">使用 ${escape(choice.title)} →</button>`).join('');find('[data-choices]').querySelectorAll('button').forEach(b=>b.onclick=guard(async()=>{await loadCatalog();$('[data-destination]').value=b.dataset.choice;if(!$('[data-destination]').value)throw Error('流程版本已更新，请在列表重新选择。');$('[data-text]').value=turn.text;files=[...attachments];drawFiles();await send();}));
       const setup=find('[data-setup]');
@@ -229,7 +234,10 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
         if(wait&&entry.lastDetail!==detailKey){entry.details.hidden=false;find('[data-details-toggle]').setAttribute('aria-expanded','true');find('[data-details-toggle]').textContent='收起步骤与结果';}
         if(!entry.details.hidden&&entry.lastDetail!==detailKey){renderRun(run,entry.details);entry.lastDetail=detailKey;}
         if(run.status==='succeeded'&&state.phase==='completed'&&entry.lastMedia!==run.id){
-          entry.lastMedia=run.id;const found=new Map();function visit(v){if(!v||typeof v!=='object')return;if(v.id&&v.digest&&v.media_type&&!attachments.some(a=>a.id===v.id))found.set(v.id,v);Object.values(v).forEach(visit);}run.steps.forEach(s=>visit(s.output));
+          const found=new Map();function visit(v){if(!v||typeof v!=='object')return;if(v.id&&v.digest&&v.media_type&&!attachments.some(a=>a.id===v.id))found.set(v.id,v);Object.values(v).forEach(visit);}run.steps.forEach(s=>visit(s.output));
+          // Operator final answers contain text; its artifacts live in tool receipts and child runs.
+          // Collect actual stored artifacts across the run tree so these deliverables are downloadable.
+          const result=await api('/v1/runs/'+encodeURIComponent(run.id)+'/result');result.artifacts.forEach(visit);if(c.id!==selected)return;entry.lastMedia=run.id;
           clearMedia(entry.media);entry.media.innerHTML=[...found.values()].map(a=>`<div class="chat-result-file"><span>${glyph(a.media_type.split('/')[0])}</span><b>${escape(a.name)}</b><button class="small" data-download="${a.id}">下载</button>${canPreview(a.media_type)?`<button class="small" data-media-preview="${a.id}" data-media-type="${escape(a.media_type)}" data-filename="${escape(a.name)}">预览</button>`:''}</div>`).join('');entry.media.querySelectorAll('[data-download]').forEach(b=>b.onclick=guard(()=>downloadArtifact(found.get(b.dataset.download))));bindMedia(entry.media,token(),guard);
         }
       }
