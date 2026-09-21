@@ -53,6 +53,7 @@
 
 [最新开发与验收记录](NEXT_DELIVERY.md)汇总当前进度。以下文件保留了各阶段的设计和测试结果；旧文档中的功能状态以记录日期为准。
 
+- 工具脚本：[真实模型验收](https://github.com/DongSky/EasyAgent/blob/main/scripts/live_acceptance.py)、[发布前脱敏扫描](https://github.com/DongSky/EasyAgent/blob/main/scripts/check_secrets.py)、[导出示例流程](https://github.com/DongSky/EasyAgent/blob/main/scripts/export_examples.py)。
 - 开发计划：[原始计划](PLAN.md)、[扩展路线](EXTENSION_ROADMAP.md)、[功能检查](COMPLETENESS.md)。
 - 设计参考：[开源项目研究](OPEN_SOURCE_REVIEW.md)、[模型与研究方法](MODELS_AND_RESEARCH.md)。
 - 项目对比：[Pi/Hermes 早期对比](PI_HERMES_GAP_BASELINE.md)、[后续差距复核](PI_HERMES_GAP_ANALYSIS.md)、[Pi/Hermes/Codex/LoopX 学习与落地](COMPETITOR_LEARNINGS.md)。

@@ -1,0 +1,17 @@
+{
+  "name": "家校通知：原文留档 → 行动项（含日期与负责人）→ 可审计 JSON",
+  "metadata": {"family": "life-butler", "synthetic": true, "note": "真实部署把 items 步骤换成带 response_schema 的 model/agent 步骤；此处用静态 transform 保持可复现。"},
+  "inputs": {
+    "notice": "关于收集社会实践报名表的通知\n\n各位家长：\n本学期的社会实践活动已开始报名，请家长在 9 月 25 日前把填好的《社会实践报名表》交给班主任王老师。\n10 月 12 日上午 8:30 在社区活动中心集合，请给孩子准备水壶和运动鞋。\n本次活动需要若干家长志愿者，具体人选由家委会商量后另行通知。\n如有疑问请拨打 12345 咨询。\n\n三年级(2)班 家委会\n9 月 15 日"
+  },
+  "steps": [
+    {"id": "notice", "kind": "artifact", "input": {"name": "notice.txt", "media_type": "text/plain", "content": {"$ref": "$input.notice"}}},
+    {"id": "echo", "target": "core.echo", "depends_on": ["notice"], "input": {"notice": {"$ref": "$input.notice"}, "notice_artifact": {"$ref": "notice.name"}}},
+    {"id": "items", "kind": "transform", "depends_on": ["echo"], "input": {"source_notice": {"$ref": "echo.notice"}, "items": [
+      {"title": "提交《社会实践报名表》", "due_date": "2026-09-25", "owner": "王老师(班主任)", "needs_confirmation": false},
+      {"title": "带孩子参加社会实践活动", "due_date": "2026-10-12", "owner": "家长", "needs_confirmation": false},
+      {"title": "安排家长志愿者", "due_date": null, "owner": null, "needs_confirmation": true}
+    ]}},
+    {"id": "actions", "kind": "artifact", "depends_on": ["items"], "input": {"name": "action_items.json", "media_type": "application/json", "content": {"$ref": "items"}}}
+  ]
+}

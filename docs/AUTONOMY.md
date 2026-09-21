@@ -81,6 +81,12 @@ Studio「创建助手」直接调用编译工具，不走回合状态机。两�
 - 反思产出的记忆和技能不经过评估门槛，但都带来源（`reflection:<run_id>`）、可查看、可删除、可回滚（技能有版本）。它不训练模型权重。
 - 自动执行不等于安全：写工具跳过确认是用户在对话中显式选择的执行方式；SDK 默认仍为逐项确认。
 
+## 工具脚本
+
+- `scripts/live_acceptance.py`：用**真实模型与真实连接**跑一组端到端任务（终端写脚本、数据汇总、联网调研、并行子 agent + 生图、报错修正），逐条写出带工具调用与事件记录的 transcript；失败会如实报为失败并以非零状态退出。CI 不运行它。
+- `scripts/check_secrets.py`：发布前扫描所有待提交文件里的密钥、私有地址与个人路径；白名单按**具体文件 + 具体规则**放行（测试夹具），不做模式级屏蔽。`--staged` 只查已暂存内容。
+- `scripts/export_examples.py`：把已保存流程导出为可导入示例包，拒绝导出仍需要凭证的流程，并写成 `examples/workflows/*.eah-workflow.json`（附 Apache-2.0 许可文件）。
+
 ## 代码与测试
 
 - `src/easyagent/autonomy.py`：设置、工具组、agent 步骤与系统提示、finalize、反思、新工具。
