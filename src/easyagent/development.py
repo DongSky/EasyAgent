@@ -154,7 +154,7 @@ class RuntimeDevelopment:
             if previous:
                 return self.replay(operation_id)
             row = db.execute(
-                "SELECT revision,scope FROM definition_versions WHERE kind=? AND id=? ORDER BY revision DESC LIMIT 1",
+                "SELECT revision,scope,body FROM definition_versions WHERE kind=? AND id=? ORDER BY revision DESC LIMIT 1",
                 (kind, identifier),
             ).fetchone()
             if not row and kind == "workflow":
@@ -167,11 +167,14 @@ class RuntimeDevelopment:
                         (kind, identifier, legacy[0], time.time()),
                     )
                     row = db.execute(
-                        "SELECT revision,scope FROM definition_versions WHERE kind=? AND id=?",
+                        "SELECT revision,scope,body FROM definition_versions WHERE kind=? AND id=?",
                         (kind, identifier),
                     ).fetchone()
             current = row["revision"] if row else 0
             if current != expected_revision:
+                if context and row and json.loads(row["body"]) == body and (scope is None or row["scope"] == scope):
+                    # An agent retrying a save whose acknowledgement was lost finds identical content committed.
+                    return self.get(kind, identifier, current)
                 raise Conflict(f"revision conflict: expected {expected_revision}, current {current}")
             if scope is not None and row and row["scope"] != scope:
                 raise PermissionError("definition belongs to a different authoring scope")
@@ -211,7 +214,12 @@ class RuntimeDevelopment:
         # Check everything before committing, including any actual credential configuration.
         build_http_tool(definition)
         if expected_revision == 0 and definition.name in self.hub.tools.entries:
-            raise Conflict("tool already exists; update it with expected_revision")
+            try:
+                latest = self.get("api", definition.name) if context else None
+            except KeyError:
+                latest = None
+            if not latest or latest["definition"] != public or (scope is not None and latest["scope"] != scope):
+                raise Conflict("tool already exists; update it with expected_revision")
         result = self.put("api", definition.name, public, expected_revision, scope=scope, context=context)
         if definition.api_key and not definition.api_key_env:
             self.session_keys[public["api_key_env"]] = definition.api_key

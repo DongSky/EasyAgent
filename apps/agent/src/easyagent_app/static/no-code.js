@@ -1,5 +1,5 @@
 import {modelChoices} from './model-choice.js';
-import {retryPanel,bindRetry,retryProgress} from './run-retry.js?v=20260921-auto-7';
+import {retryPanel,bindRetry,retryProgress} from './run-retry.js?v=20260921-operator-8';
 // One source of truth: persist the compiled graph, preview it, run it, export it.
 export function noCodeBuilder({api,$,escape,download,watch,loadWorkflow,showTab,listWorkflows,flash,token,shareWorkflow}) {
   let identifier=null,plan=null,savedSignature='',preferredModel='auto',availableModels=[],defaultModel=null,busy=false,epoch=0;

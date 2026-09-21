@@ -86,15 +86,15 @@ async def public_search(query):
 async def research(hub, ctx, queries):
     evidence = []
     available = [t['name'] for t in hub.available_tools() if t['name'].startswith('search.') and t['effect'] == 'read']
-    for index, query in enumerate(queries[:2]):
+    for index, query in enumerate(queries[:6]):
         try:
             if available:
                 result = await hub.tools.invoke(hub.store, ctx.job, available[0], {'query': query}, slot=100 + index)
             else:
                 result = await public_search(query)
-            rows = result.get('results', [])[:3]
+            rows = result.get('results', [])[:5]
             evidence.append({'query': query, 'results': rows, 'untrusted_reference': True})
-            for row in rows[:2]:
+            for row in rows[:3]:
                 try:
                     document = await fetch_document(row['url'])
                     document.pop('_html', None)

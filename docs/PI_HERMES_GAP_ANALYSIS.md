@@ -9,8 +9,8 @@
 1. **扩展能力**：工具、命令/快捷键、生命周期事件、上下文和工具调用拦截、模型 provider、Skill/模板、状态/设置/选项、Web UI 贡献。支持带 Schema 的服务、固定依赖、常驻进程、迁移、状态 CAS、事件重放、不可变版本及热更新/回滚。采用独立协议；不是 Pi TypeScript 包的直接运行兼容层，也未覆盖 Chord 的完整服务与状态同步机制。
 2. **持续会话**：独立 Conversation/Turn、持久原文、follow-up/steer、取消、fork、FTS 检索、保留来源的摘要和可选后台压缩。真实 HTTP SSE 支持 Chat/Responses/Messages 的文本与工具参数分片。
 3. **学习与记忆**：任务证据生成经验策略候选，执行评估后发布/复用/回滚；记忆命名空间授权、合并去重与来源归档。后台复盘默认关闭，只处理明确声明的任务，不自动发布。
-4. **新代码**：Agent 通过完整 Schema 创建 JS/WASM 源码候选，实际试跑、失败拒绝发布、审批发布后跨流程复用。Python/Node/Rust 完整进程扩展要求源码摘要信任，不自动下载依赖。前置参数错误返回 Agent 修正，权限错误与不确定写入仍中止或等待处理。
-5. **动态协作**：持久子 Run 和邮箱，spawn/send/reply/status/wait/cancel/result，父子权限收窄、层级/数量限制和根预算共享。单 worker 等待不会阻塞子任务。
+4. **新代码**：Agent 通过完整 Schema 创建 JS/WASM 源码候选，实际试跑、失败拒绝发布、发布后跨流程复用并自动进入节点库。Python/Node/Rust 完整进程扩展要求源码摘要信任，不自动下载依赖。2026-09-21 起，对话办事的自主 Operator 默认持有代码、接口定义、终端、子 agent、记忆和技能授权，工具异常（含权限拒绝、HTTP 失败、未知工具）作为观察结果回喂模型自我纠错；暂停信号、租约丢失与用户预算仍中断。见 [AUTONOMY.md](AUTONOMY.md)。
+5. **动态协作**：持久子 Run 和邮箱，spawn/send/reply/status/wait/cancel/result，父子权限收窄、层级/数量限制和根预算共享。单 worker 等待不会阻塞子任务。子 agent 可继承父步骤已持有的代码/开发/记忆/技能授权（仅收窄、不放宽）。
 6. **连接与提醒**：webhook/Telegram/CalDAV、版本化配置、独立投递 outbox/回执、时区 cron 与错过调度处理；签名消息网关去重并接续会话。MCP 长连接、OAuth/PKCE/refresh、动态工具发现和健康状态。
 7. **分发与运维**：源码包摘要/发布者签名、跨完整工作流分享、生成开发脚手架、macOS 独立应用、doctor/metrics/trace、加密 SQLite 备份恢复与可重复 soak 脚本。
 8. **手机基础**：独立 Rust 核心已承担 DAG/数据引用/状态机/授权审批/checkpoint/outbox/不确定结果核验，Swift/Kotlin Host 接入。iOS 模拟器通过界面运行了本地离线示例。

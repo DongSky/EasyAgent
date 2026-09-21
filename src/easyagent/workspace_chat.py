@@ -15,7 +15,53 @@ from .contracts import Contract
 from .store import Conflict, encode
 from .pending_connections import MissingPlanningModel, planner_requirement, inventory_fingerprint
 
-TERMINAL = {'succeeded', 'failed', 'cancelled'}
+class Phase:
+    """Every state a conversation turn can be in, with the tables that classify it.
+
+    One vocabulary for the controller, the API and the browser: `enrich` ships the tables to the
+    client so a new phase cannot be half-added (labelled in one place, classified in another).
+    """
+
+    # waiting for work
+    QUEUED = 'queued'
+    STEERED = 'steered'            # guidance appended to a run that has not consumed it yet
+    # preparing or performing a run
+    ROUTING = 'routing'            # an existing workflow is being matched
+    BUILDING = 'building'          # the compiler is generating a workflow
+    WORKING = 'working'            # the autonomous operator is acting
+    EXECUTING = 'executing'        # a frozen workflow is running
+    # waiting on the person or the environment
+    CLARIFICATION = 'clarification'
+    WAITING_CONNECTIONS = 'waiting_connections'
+    # outcomes
+    COMPLETED = 'completed'
+    ANSWERED = 'answered'
+    SUPERSEDED = 'superseded'
+    FAILED = 'failed'
+    CANCELLED = 'cancelled'
+
+    STARTING_SUFFIX = '_starting'  # a run is submitted as <phase>_starting, then resumed as <phase>
+
+    LABELS = {
+        QUEUED: '已收到', ROUTING: '正在匹配合适的流程', BUILDING: '正在创建新流程', WORKING: '正在自主处理',
+        EXECUTING: '正在执行', COMPLETED: '处理完成', WAITING_CONNECTIONS: '已保存 · 等待连接模型或服务',
+        SUPERSEDED: '已合并到后续消息', STEERED: '已补充到当前任务', CLARIFICATION: '需要补充一点信息',
+        ANSWERED: '回复', FAILED: '处理遇到问题', CANCELLED: '已停止',
+    }
+    # Turns that spend a step slot: the card animates and the composer offers "append guidance".
+    ACTIVE = (QUEUED, ROUTING, BUILDING, WORKING, EXECUTING)
+    OPERATOR = (WORKING,)
+    # A turn in one of these is finished; nothing may overwrite it.
+    TERMINAL = (COMPLETED, ANSWERED, SUPERSEDED, FAILED, CANCELLED)
+    # Turn states a queued steer message is allowed to settle into.
+    SETTLED = TERMINAL + (STEERED,)
+    # A failed run is handed back to the compiler only for these phases.
+    REPAIRABLE = (EXECUTING,)
+
+
+# Run statuses that end a run. Distinct from Phase.TERMINAL, which describes turns.
+RUN_TERMINAL = {'succeeded', 'failed', 'cancelled'}
+WORKING_LABEL = '正在自主处理：查看下方活动记录；可以继续发消息补充要求。'
 
 
 class DispatchDecision(Contract):
@@ -81,6 +127,9 @@ class WorkspaceChat:
 
     def enrich(self, conversation):
         conversation['workspace'] = self.enabled(conversation['id'])
+        # The browser renders turn phases with these tables instead of its own copy of them.
+        conversation['phases'] = {'labels': Phase.LABELS, 'active': list(Phase.ACTIVE),
+                                  'operator': list(Phase.OPERATOR), 'settled': list(Phase.SETTLED)}
         if conversation['workspace']:
             with self.store.connect() as db:
                 for turn in conversation['turns']:
@@ -88,7 +137,7 @@ class WorkspaceChat:
                     if row:
                         state = json.loads(row[0])
                         turn['task'] = {k: v for k, v in state.items() if k not in ('candidates', 'request', 'workflow', 'assistant', 'route_workflow', 'context', 'material_text')}
-                        if state.get('phase') == 'waiting_connections':
+                        if state.get('phase') == Phase.WAITING_CONNECTIONS:
                             turn['task']['can_resume'] = self.setup_changed(conversation, state)
                         turn['task'].pop('inventory', None)
         return conversation
@@ -117,9 +166,21 @@ class WorkspaceChat:
     def public_catalog(self):
         return [{k: v for k, v in c.items() if k != 'workflow'} for c in self.catalog()]
 
+    def working_turn(self, conversation_id):
+        """The turn whose autonomous operator run is currently active, if any."""
+        with self.store.connect() as db:
+            row = db.execute("SELECT t.id,t.run_id,j.state FROM conversation_turns t JOIN conversation_jobs j ON j.turn_id=t.id "
+                             "WHERE t.conversation=? AND t.status IN ('starting','running') ORDER BY t.created DESC LIMIT 1",
+                             (conversation_id,)).fetchone()
+        if row and json.loads(row['state']).get('phase', '').startswith(Phase.WORKING):
+            return dict(row)
+        return None
+
     async def send(self, conversation, body):
         if body.mode == 'steer':
-            raise ValueError('工作流按已保存的步骤执行，请发送后续消息，或停止本轮后重新安排。')
+            if not self.working_turn(conversation['id']):
+                raise ValueError('当前没有正在自主处理的任务；请作为普通消息发送，或停止本轮后重新安排。')
+            return await self.steer(conversation, body)
         payload = body.model_dump(exclude={'idempotency_key'})
         with self.store.connect() as db:
             existing = db.execute('SELECT t.id,t.status,t.run_id,j.state FROM conversation_turns t JOIN conversation_jobs j ON j.turn_id=t.id WHERE conversation=? AND key=?', (conversation['id'], body.idempotency_key)).fetchone()
@@ -143,17 +204,17 @@ class WorkspaceChat:
             previous = db.execute('SELECT j.state FROM conversation_jobs j JOIN conversation_turns t ON t.id=j.turn_id WHERE t.conversation=? ORDER BY t.created DESC LIMIT 1', (conversation['id'],)).fetchone()
             if previous and not attachments:
                 last = json.loads(previous[0])
-                if last.get('phase') in ('clarification', 'waiting_connections'):
+                if last.get('phase') in (Phase.CLARIFICATION, Phase.WAITING_CONNECTIONS):
                     info = last.get('attachments', [])
                     attachments = [a['id'] for a in info]
             turn = uuid.uuid4().hex
             text = transformed['text'].strip() or '请处理这些附件。'
             material_text = text
-            if previous and json.loads(previous[0]).get('phase') in ('clarification', 'waiting_connections'):
+            if previous and json.loads(previous[0]).get('phase') in (Phase.CLARIFICATION, Phase.WAITING_CONNECTIONS):
                 last = json.loads(previous[0])
                 material_text = last.get('material_text', last['request']['text']) + '\n补充：' + text
-            state = {'material_text': material_text, 'request': payload, 'phase': 'queued', 'attachments': info, 'attachment_ids': attachments, 'runs': [], 'message': '已收到，正在安排。', 'choices': []}
-            if previous and json.loads(previous[0]).get('phase') == 'waiting_connections':
+            state = {'material_text': material_text, 'request': payload, 'phase': Phase.QUEUED, 'attachments': info, 'attachment_ids': attachments, 'runs': [], 'message': '已收到，正在安排。', 'choices': []}
+            if previous and json.loads(previous[0]).get('phase') == Phase.WAITING_CONNECTIONS:
                 last = json.loads(previous[0])
                 state['previous_draft'] = last.get('blueprint')
                 state['previous_planned_steps'] = last.get('planned_steps', [])
@@ -161,7 +222,7 @@ class WorkspaceChat:
                 for pending in db.execute("SELECT t.id,j.state FROM conversation_turns t JOIN conversation_jobs j ON j.turn_id=t.id "
                                           "WHERE t.conversation=? AND t.status='waiting_connections'", (conversation['id'],)).fetchall():
                     old_state = json.loads(pending['state'])
-                    old_state.update(phase='superseded', message='已合并到后续消息。')
+                    old_state.update(phase=Phase.SUPERSEDED, message='已合并到后续消息。')
                     db.execute("UPDATE conversation_turns SET status='cancelled' WHERE id=?", (pending['id'],))
                     db.execute('UPDATE conversation_jobs SET state=? WHERE turn_id=?', (encode(old_state), pending['id']))
             db.execute("INSERT INTO conversation_turns VALUES(?,?,?,?,'queued',NULL,NULL,?,?)", (turn, conversation['id'], text, body.mode, body.idempotency_key, time.time()))
@@ -170,11 +231,31 @@ class WorkspaceChat:
         await self.hub.conversations.tick()
         return {'id': turn, 'status': 'queued'}
 
+    async def steer(self, conversation, body):
+        """Append guidance to the running operator; the agent loop consumes queued steer turns."""
+        with self.store.transaction() as db:
+            old = db.execute('SELECT id,status,run_id FROM conversation_turns WHERE conversation=? AND key=?',
+                             (conversation['id'], body.idempotency_key)).fetchone()
+            if old:
+                return {'id': old['id'], 'status': old['status'], 'run_id': old['run_id']}
+            text = body.text.strip()
+            if body.attachments:
+                info = [self.hub.attachments.describe(a) for a in dict.fromkeys(body.attachments)]
+                text += '\n附件：' + encode([{k: a[k] for k in ('id', 'name', 'kind', 'media_type')} for a in info])
+            turn = uuid.uuid4().hex
+            state = {'phase': Phase.STEERED, 'request': body.model_dump(exclude={'idempotency_key'}), 'attachments': [],
+                     'attachment_ids': list(dict.fromkeys(body.attachments)), 'runs': [], 'choices': [],
+                     'message': '已补充到当前任务。'}
+            db.execute("INSERT INTO conversation_turns VALUES(?,?,?,?,'queued',NULL,NULL,?,?)",
+                       (turn, conversation['id'], text, 'steer', body.idempotency_key, time.time()))
+            db.execute('INSERT INTO conversation_jobs VALUES(?,?)', (turn, encode(state)))
+        return {'id': turn, 'status': 'queued'}
+
     def save(self, turn, state, status=None, run_id=None):
         with self.store.transaction() as db:
             # A cancellation is terminal and cannot be overwritten by a late controller transition.
             current = db.execute('SELECT t.status,j.state FROM conversation_turns t JOIN conversation_jobs j ON j.turn_id=t.id WHERE t.id=?', (turn['id'],)).fetchone()
-            if current[0] in TERMINAL or current[1] != turn['_serialized']:
+            if current[0] in Phase.TERMINAL or current[1] != turn['_serialized']:
                 return False
             db.execute('UPDATE conversation_jobs SET state=? WHERE turn_id=?', (encode(state), turn['id']))
             turn['_serialized'] = encode(state)
@@ -187,7 +268,7 @@ class WorkspaceChat:
         state['message'] = message
         with self.store.transaction() as db:
             current = db.execute('SELECT t.status,j.state FROM conversation_turns t JOIN conversation_jobs j ON j.turn_id=t.id WHERE t.id=?', (turn['id'],)).fetchone()
-            if current[0] in TERMINAL or current[1] != turn['_serialized']:
+            if current[0] in Phase.TERMINAL or current[1] != turn['_serialized']:
                 return
             self.hub.conversations.append(db, turn['conversation'], turn['id'], 'assistant', message)
             db.execute('UPDATE conversation_jobs SET state=? WHERE turn_id=?', (encode(state), turn['id']))
@@ -197,13 +278,17 @@ class WorkspaceChat:
 
     def start_run(self, turn, state, phase, workflow):
         # Freeze before submitting; recovery reuses exactly the same spec and idempotency key.
-        state['phase'] = phase + '_starting'
+        state['phase'] = phase + Phase.STARTING_SUFFIX
         state['workflow'] = self.hub.prepare(workflow).model_dump()
         if self.save(turn, state, 'starting'):
             self.resume_start(turn, state)
 
     def resume_start(self, turn, state):
-        phase = state['phase'].removesuffix('_starting')
+        phase = state['phase'].removesuffix(Phase.STARTING_SUFFIX)
+        if state.get('resume_build'):
+            # Crash between submitting and recording the build run: restart the compiler turn.
+            state.pop('resume_build', None)
+            return self.resume_build(turn, state)
         key = 'workspace-chat:' + turn['id'] + ':' + phase
         if state.get('repair_attempt'):
             key += ':repair-' + str(state['repair_attempt'])
@@ -231,15 +316,21 @@ class WorkspaceChat:
                 'required_connections': [planner_requirement(conversation['model'])], 'workflow': None}, 'planning')
         state['model'] = model
         state['context'] = self.context(conversation, turn)
+        engine = self.hub.autonomy.engine_for(model)
         if state['request']['intent'] == 'create':
+            if engine == 'operator':
+                return self.begin_operator(conversation, turn, state)
             return self.begin_build(turn, state, turn['text'][:60])
         candidates = self.catalog()
+        if engine == 'operator' and state['request']['intent'] == 'auto' and not candidates:
+            # Nothing saved to match against: skip the routing call and act directly.
+            return self.begin_operator(conversation, turn, state)
         selected = state['request'].get('workflow')
         if selected:
             candidates = [c for c in candidates if c['key'] == selected]
         # Never silently choose outside the supplied, pinned catalog.
         if len(candidates) > 100 and not selected:
-            state['phase'] = 'clarification'
+            state['phase'] = Phase.CLARIFICATION
             return self.finish(turn, state, 'succeeded', '可用流程较多，请在输入框上方先选择一个流程，或选择“创建新流程”。')
         state['candidates'] = candidates
         catalog = [{k: v for k, v in c.items() if k != 'workflow'} |
@@ -272,7 +363,7 @@ Respond in the user's language. title is only used if creating a new workflow. F
         context = {'conversation': state['context'], 'request': state.get('material_text', turn['text']), 'intent': state['request']['intent'], 'selected_workflow': selected, 'attachments': material, 'catalog': catalog}
         context_json = json.dumps(context, ensure_ascii=False)
         if len(context_json) > 180_000:
-            state['phase'] = 'clarification'
+            state['phase'] = Phase.CLARIFICATION
             return self.finish(turn, state, 'succeeded', '本次材料与流程目录较大，请先指定一个流程，或把需求和材料拆成几次提交。尚未调用模型或执行业务步骤。')
         flow = {'name': '理解需求与匹配流程', 'metadata': {'workspace_conversation': conversation['id'], 'workspace_turn': turn['id'], 'step_labels': {'route': '理解需求 · 匹配已有流程'}},
                 'limits': {'model_calls': 1, 'tool_calls': 0, 'output_tokens': 4096},
@@ -319,14 +410,29 @@ Respond in the user's language. title is only used if creating a new workflow. F
             try:
                 return self.bind(turn, state, choices[choice.candidate], choice.inputs)
             except ValueError as exc:
-                state['phase'] = 'clarification'
+                state['phase'] = Phase.CLARIFICATION
                 return self.finish(turn, state, 'succeeded', str(exc))
         if choice.action == 'create':
+            if self.hub.autonomy.engine_for(state['model']) == 'operator':
+                conversation = self.hub.conversations.get(turn['conversation'])
+                return self.begin_operator(conversation, turn, state)
             return self.begin_build(turn, state, choice.title)
-        state['phase'] = 'clarification' if choice.action != 'reply' else 'answered'
+        state['phase'] = Phase.CLARIFICATION if choice.action != 'reply' else Phase.ANSWERED
         keys = list(dict.fromkeys(([choice.candidate] if choice.candidate else []) + choice.alternatives))
         state['choices'] = [{k: choices[key][k] for k in ('key', 'title', 'description')} for key in keys if key in choices]
         self.finish(turn, state, 'succeeded', choice.message if choice.action != 'use' else '这份流程可能适合，但还需要你确认。' + choice.message)
+
+    def begin_operator(self, conversation, turn, state):
+        """Run the autonomous operator: observe, act, build, delegate and remember inside one durable agent step."""
+        step = self.hub.autonomy.agent_step(conversation, turn, state, state['model'])
+        flow = {'name': (turn['text'].strip().splitlines() or ['对话任务'])[0][:60] or '对话任务',
+                'metadata': {'conversation': conversation['id'], 'turn': turn['id'], 'operator': True,
+                             'workspace_conversation': conversation['id'], 'workspace_turn': turn['id'],
+                             'step_labels': {'operator': '自主处理'}},
+                'steps': [step]}
+        state.update(engine='operator', message=WORKING_LABEL)
+        state.pop('assistant', None)
+        self.start_run(turn, state, 'working', flow)
 
     def begin_build(self, turn, state, title):
         from .studio import Assistant
@@ -339,7 +445,8 @@ Respond in the user's language. title is only used if creating a new workflow. F
         if state.get('previous_draft') or state.get('previous_planned_steps'):
             self.store.memory_put('studio-assistant-drafts', identifier, {'workflow': state.get('previous_draft'),
                                   'planned_steps': state.get('previous_planned_steps', [])}, 'conversation')
-        state.update(phase='building_starting', assistant_id=identifier, assistant=assistant, message='正在编排可复用的工作流…')
+        state.update(phase=Phase.WORKING + Phase.STARTING_SUFFIX, mode=Phase.BUILDING, resume_build=True,
+                     assistant_id=identifier, assistant=assistant, message='正在编排可复用的工作流…')
         if self.save(turn, state, 'starting'):
             self.resume_build(turn, state)
 
@@ -348,7 +455,8 @@ Respond in the user's language. title is only used if creating a new workflow. F
         build = {'id': existing['run_id']} if existing else start_build(self.hub, state['assistant_id'], state['assistant'])
         if build.get('status') == 'waiting_connections':
             return self.wait_connections(self.hub.conversations.get(turn['conversation']), turn, state, build, 'building')
-        state.update(phase='building', run_id=build['id'])
+        state.update(phase=Phase.WORKING, run_id=build['id'])
+        state.pop('resume_build', None)
         if build['id'] not in state['runs']:
             state['runs'].append(build['id'])
         if not self.save(turn, state, 'running', build['id']):
@@ -366,13 +474,14 @@ Respond in the user's language. title is only used if creating a new workflow. F
             'attempt': attempt}
         self.store.memory_put('studio-build-feedback', identifier, feedback, 'observed-run')
         self.store.memory_put('studio-assistants', identifier, assistant, 'conversation')
-        state.update(phase='building_starting', assistant_id=identifier, repair_attempt=attempt,
-                     repair_from=run['id'], message='发现步骤失败，正在根据实际结果修正并验证…')
+        state.update(phase=Phase.WORKING + Phase.STARTING_SUFFIX, mode=Phase.BUILDING,
+                     assistant_id=identifier, repair_attempt=attempt, repair_from=run['id'],
+                     message='发现步骤失败，正在根据实际结果修正并验证…')
         if self.save(turn, state, 'starting'):
             self.resume_build(turn, state)
 
     def wait_connections(self, conversation, turn, state, plan, stage):
-        state.update(phase='waiting_connections', waiting_stage=stage,
+        state.update(phase=Phase.WAITING_CONNECTIONS, waiting_stage=stage,
                      inventory=inventory_fingerprint(self.hub), waiting_model=conversation['model'],
                      required_connections=plan['required_connections'], blueprint=plan.get('workflow'),
                      planned_steps=plan.get('planned_steps', []),
@@ -413,7 +522,7 @@ Respond in the user's language. title is only used if creating a new workflow. F
                     'required_connections': [planner_requirement(conversation['model'])],
                     'workflow': state.get('blueprint')}, state['waiting_stage'])
                 return {'resumed': False}
-            if state['waiting_stage'] == 'building' and state.get('assistant'):
+            if state.get('assistant'):
                 state['setup_attempt'] = state.get('setup_attempt', 0) + 1
                 state['assistant_id'] = 'chat-' + turn['id'] + '-setup-' + str(state['setup_attempt'])
                 state['assistant'] = {**state['assistant'], 'model': model}
@@ -421,9 +530,10 @@ Respond in the user's language. title is only used if creating a new workflow. F
                 self.store.memory_put('studio-assistant-drafts', state['assistant_id'],
                                       {'workflow': state.get('blueprint'), 'required_connections': state['required_connections'],
                                        'planned_steps': state.get('planned_steps', [])}, 'conversation')
-                state.update(phase='building_starting', model=model, message='已检测到连接变化，正在重新匹配接口并验证流程…')
+                state.update(phase=Phase.WORKING + Phase.STARTING_SUFFIX, mode=Phase.BUILDING, resume_build=True,
+                             model=model, message='已检测到连接变化，正在重新匹配接口并验证流程…')
             else:
-                state.update(phase='queued', message='已识别到编排模型，继续处理已保存的需求…')
+                state.update(phase=Phase.QUEUED, message='已识别到编排模型，继续处理已保存的需求…')
             state.pop('run_id', None)
             self.save(turn, state, 'queued')
         await self.hub.conversations.tick()
@@ -431,7 +541,7 @@ Respond in the user's language. title is only used if creating a new workflow. F
 
     async def tick(self, conversation):
         with self.store.connect() as db:
-            row = db.execute("SELECT t.*,j.state FROM conversation_turns t JOIN conversation_jobs j ON j.turn_id=t.id WHERE t.conversation=? AND t.status NOT IN ('succeeded','failed','cancelled') ORDER BY t.created,t.id LIMIT 1", (conversation['id'],)).fetchone()
+            row = db.execute("SELECT t.*,j.state FROM conversation_turns t JOIN conversation_jobs j ON j.turn_id=t.id WHERE t.conversation=? AND t.status NOT IN ('succeeded','failed','cancelled','steered') ORDER BY t.created,t.id LIMIT 1", (conversation['id'],)).fetchone()
         if not row:
             return
         turn = dict(row)
@@ -440,7 +550,18 @@ Respond in the user's language. title is only used if creating a new workflow. F
         had_runs = bool(state['runs'])
         try:
             phase = state['phase']
-            if phase == 'waiting_connections':
+            if phase == Phase.STEERED:
+                # The operator finished before consuming this guidance: treat it as an ordinary follow-up.
+                state.update(phase=Phase.QUEUED, request={**state['request'], 'mode': 'follow_up'},
+                             material_text=turn['text'], message='已收到，正在安排。')
+                if not state.get('attachments') and state.get('attachment_ids'):
+                    state['attachments'] = [self.hub.attachments.describe(a) for a in state['attachment_ids']]
+                with self.store.transaction() as db:
+                    self.hub.conversations.append(db, conversation['id'], turn['id'], 'user', turn['text'])
+                if not self.save(turn, state, 'queued'):
+                    return
+                phase = Phase.QUEUED
+            if phase == Phase.WAITING_CONNECTIONS:
                 with self.store.transaction() as db:
                     next_row = db.execute("SELECT t.id,t.text,j.state FROM conversation_turns t JOIN conversation_jobs j ON j.turn_id=t.id "
                                           "WHERE t.conversation=? AND t.status='queued' ORDER BY t.created,t.id LIMIT 1",
@@ -455,17 +576,15 @@ Respond in the user's language. title is only used if creating a new workflow. F
                         following['previous_planned_steps'] = state.get('planned_steps', [])
                         db.execute('UPDATE conversation_jobs SET state=? WHERE turn_id=?', (encode(following), next_row['id']))
                 if next_row:
-                    state['phase'] = 'superseded'
+                    state['phase'] = Phase.SUPERSEDED
                     self.finish(turn, state, 'cancelled', '已合并到后续消息。')
                 return
-            if phase == 'queued':
+            if phase == Phase.QUEUED:
                 return self.begin(conversation, turn, state)
-            if phase == 'building_starting':
-                return self.resume_build(turn, state)
-            if phase.endswith('_starting'):
+            if phase.endswith(Phase.STARTING_SUFFIX):
                 return self.resume_start(turn, state)
             run = self.store.run(state['run_id'])
-            if run['status'] not in TERMINAL:
+            if run['status'] not in RUN_TERMINAL:
                 return
             if run['status'] != 'succeeded':
                 transient = any(s.get('retry_state', {}).get('error', {}).get('retryable') for s in run['steps'] if s['status'] == 'failed')
@@ -478,30 +597,28 @@ Respond in the user's language. title is only used if creating a new workflow. F
                 explicit_stop = any(s.get('retry_state', {}).get('error', {}).get('category') in ('budget', 'configuration')
                                     for s in run['steps'] if s['status'] == 'failed')
                 if (run['status'] == 'failed' and not transient and not explicit_stop
-                        and phase == 'executing' and state.get('assistant')):
+                        and phase in Phase.REPAIRABLE and state.get('assistant')):
                     return self.repair(turn, state, run)
+                if phase in Phase.OPERATOR and not transient:
+                    # Failed autonomous tasks are remembered too, so the next attempt starts informed.
+                    self.hub.autonomy.finalize(run, state, conversation['id'], state['model'])
                 state['failed_phase'] = phase
-                state['phase'] = run['status']
+                state['phase'] = run['status']  # failed/cancelled mirror the run status
                 message = '已停止本轮。' if run['status'] == 'cancelled' else '这次处理未完成。已完成步骤、搜索资料和附件已保留，可从失败处重试。'
                 return self.finish(turn, state, run['status'], message)
-            if phase == 'routing':
+            if phase == Phase.ROUTING:
                 return self.decide(turn, state, run)
-            if phase == 'building':
-                plan = build_status(self.hub, state['assistant_id'], state['assistant'])
-                if plan['status'] == 'waiting_connections':
-                    return self.wait_connections(conversation, turn, state, plan, 'building')
-                if plan['status'] != 'ready':
-                    state['phase'] = 'clarification'
-                    return self.finish(turn, state, 'succeeded', plan.get('explanation', '') + '\n' + '\n'.join(plan.get('questions') or plan.get('errors') or ['请补充需求或连接所需服务。']))
-                candidate = {'key': f"assistant-{state['assistant_id']}@{plan['workflow_revision']}", 'id': 'assistant-' + state['assistant_id'], 'revision': plan['workflow_revision'], 'title': plan['workflow']['name'], 'workflow': plan['workflow'], 'input_schema': input_contract(plan['workflow'])}
-                state['reason'] = plan['explanation']
-                return self.bind(turn, state, candidate, {})
-            state['phase'] = 'completed'
+            if phase == Phase.WORKING:
+                return (self.finish_build if state.get('mode') == Phase.BUILDING
+                        else self.complete_operator)(conversation, turn, state, run)
+            state['phase'] = Phase.COMPLETED
+            # Prefer the last real answer produced by this run; an empty/JSON-only step is not a reply.
             outputs = [s['output'] for s in run['steps'] if s['status'] == 'succeeded' and s['output'] is not None]
-            text = next((o.get('text') for o in reversed(outputs) if isinstance(o, dict) and isinstance(o.get('text'), str) and o['text']), '')
-            return self.finish(turn, state, 'succeeded', text[:16000] or '已完成。每一步的结果和生成文件都保存在下方执行卡中。')
+            text = next((o['text'] for o in reversed(outputs)
+                         if isinstance(o, dict) and isinstance(o.get('text'), str) and o['text'].strip()), '')
+            return self.finish(turn, state, 'succeeded', text.strip()[:16000] or '已完成。每一步的结果和生成文件都保存在下方执行卡中。')
         except Exception as exc:
-            state['phase'] = 'failed'
+            state['phase'] = Phase.FAILED
             # Report actionable validation errors, not arbitrary upstream response bodies.
             detail = str(exc)[:1000] if isinstance(exc, (ValueError, Conflict)) else type(exc).__name__
             self.finish(turn, state, 'failed', '未能继续处理：' + detail)
@@ -510,15 +627,46 @@ Respond in the user's language. title is only used if creating a new workflow. F
                 latest = db.execute('SELECT t.status,t.run_id,j.state FROM conversation_turns t JOIN conversation_jobs j ON j.turn_id=t.id WHERE t.id=?', (turn['id'],)).fetchone()
             if not had_runs and json.loads(latest['state'])['runs']:
                 await self.hub.extensions.dispatch('turn.start', {'conversation': conversation['id'], 'run_id': latest['run_id']})
-            if latest['status'] in TERMINAL and turn['status'] not in TERMINAL:
+            if latest['status'] in Phase.TERMINAL and turn['status'] not in Phase.TERMINAL:
                 await self.hub.extensions.dispatch('turn.end', {'conversation': conversation['id'], 'run_id': latest['run_id'], 'status': latest['status']})
+
+    def finish_build(self, conversation, turn, state, run):
+        """Continue the compiler pipeline: adopt its workflow, or surface what it still needs."""
+        plan = build_status(self.hub, state['assistant_id'], state['assistant'])
+        if plan['status'] == 'waiting_connections':
+            return self.wait_connections(conversation, turn, state, plan, Phase.BUILDING)
+        if plan['status'] != 'ready':
+            state['phase'] = Phase.CLARIFICATION
+            return self.finish(turn, state, 'succeeded',
+                               plan.get('explanation', '') + '\n'
+                               + '\n'.join(plan.get('questions') or plan.get('errors') or ['请补充需求或连接所需服务。']))
+        candidate = {'key': f"assistant-{state['assistant_id']}@{plan['workflow_revision']}",
+                     'id': 'assistant-' + state['assistant_id'], 'revision': plan['workflow_revision'],
+                     'title': plan['workflow']['name'], 'workflow': plan['workflow'],
+                     'input_schema': input_contract(plan['workflow'])}
+        state['reason'] = plan['explanation']
+        state.pop('mode', None)  # the build is finished; the next run is an ordinary execution
+        return self.bind(turn, state, candidate, {})
+
+    def complete_operator(self, conversation, turn, state, run):
+        result = self.hub.autonomy.finalize(run, state, conversation['id'], state['model'])
+        if result['reflection_run']:
+            state['reflection_run'] = result['reflection_run']
+        if result['selected']:
+            state['selected'] = result['selected']
+        if result['required_connections'] and not result['selected']:
+            return self.wait_connections(conversation, turn, state, {
+                'explanation': result['text'] or '需要先连接所需的模型或服务。',
+                'required_connections': result['required_connections'], 'workflow': None}, 'operator')
+        state['phase'] = Phase.COMPLETED
+        return self.finish(turn, state, 'succeeded', (result['text'] or '已完成。')[:16000])
 
     async def interrupt(self, identifier):
         with self.store.transaction() as db:
             rows = db.execute("SELECT t.id,t.run_id,j.state FROM conversation_turns t JOIN conversation_jobs j ON j.turn_id=t.id WHERE t.conversation=? AND t.status NOT IN ('succeeded','failed','cancelled')", (identifier,)).fetchall()
             for row in rows:
                 state = json.loads(row['state'])
-                state.update(phase='cancelled', message='已停止本轮。')
+                state.update(phase=Phase.CANCELLED, message='已停止本轮。')
                 db.execute("UPDATE conversation_turns SET status='cancelled' WHERE id=?", (row['id'],))
                 db.execute('UPDATE conversation_jobs SET state=? WHERE turn_id=?', (encode(state), row['id']))
                 self.hub.conversations.append(db, identifier, row['id'], 'assistant', '已停止本轮。')

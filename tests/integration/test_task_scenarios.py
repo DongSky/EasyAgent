@@ -126,7 +126,9 @@ async def test_untrusted_content_cannot_expand_agent_tool_permissions(hub, world
             return ModelResult(tool_calls=[ToolCall(id="attack" if observed else "read", name=name, arguments={})])
     hub.models.register("adversarial-fixture", AdversarialFixture(), "deliberately-noncompliant", {"chat"})
     result = await hub.wait(hub.submit(workflow("untrusted_reviews")))
-    assert result["status"] == "failed" and "outside the allowlist" in result["steps"][0]["error"]
+    # The injected tool is refused as an observation; the noncompliant fixture keeps insisting until its budget ends.
+    assert result["status"] == "failed" and "budget" in result["steps"][0]["error"]
+    assert "tool.unknown_requested" in {e["kind"] for e in hub.store.events(result["id"])}
     with hub.store.connect() as db:
         assert db.execute("SELECT count(*) FROM invocations WHERE tool='scenario.exfiltrate'").fetchone()[0] == 0
         assert db.execute("SELECT count(*) FROM invocations WHERE tool='scenario.reviews' AND status='succeeded'").fetchone()[0] == 1

@@ -36,7 +36,7 @@ def model_server():
             content = {'explanation': '保存输入', 'questions': [], 'workflow': {
                 'name': '保存输入', 'inputs': {'message': ''},
                 'steps': [{'id': 'save', 'kind': 'artifact', 'input': {'name': 'result.txt', 'content': {'$ref': '$input.message'}}}]}}
-        return {'choices': [{'message': {'content': json.dumps(content, ensure_ascii=False) if content else 'connected'}}]}
+        return {'choices': [{'message': {'content': json.dumps(content, ensure_ascii=False) if content else '回答来自 ' + data['model']}}]}
 
     return remote, calls
 

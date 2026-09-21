@@ -163,7 +163,7 @@ async def test_invalid_test_generation_retries_tests_before_changing_code(hub, p
                 self.check_calls += 1
                 if self.check_calls == 1:
                     if problem == 'too_many':
-                        result.data['scenarios'] *= 7
+                        result.data['scenarios'] *= 40
                     else:
                         result.data['scenarios'][0]['expected'] = None
             return result

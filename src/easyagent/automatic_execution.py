@@ -54,9 +54,10 @@ async def continue_automatically(hub, run_id, body):
                     raise Conflict('本条消息已有后续任务，请在最新任务中继续。')
                 state = json.loads(turn['state'])
                 state['request']['execution'] = 'automatic'
-                state['phase'] = state.pop('failed_phase', None) or (
-                    'building' if json.loads(run['spec']).get('metadata', {}).get('assistant_builder') else
-                    'routing' if state.get('route_workflow') and not state.get('selected') else 'executing')
+                # Both engines continue inside the single `working` phase; `mode` marks the compiler.
+                state['phase'] = state.pop('failed_phase', None) or 'working'
+                if state['phase'] == 'working' and json.loads(run['spec']).get('metadata', {}).get('assistant_builder'):
+                    state['mode'] = 'building'
                 state['message'] = '正在自动继续，已完成步骤和附件已保留。'
                 db.execute('UPDATE conversation_jobs SET state=? WHERE turn_id=?', (encode(state), turn['id']))
                 db.execute("UPDATE conversation_turns SET status='running' WHERE id=?", (turn['id'],))

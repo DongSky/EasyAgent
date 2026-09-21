@@ -329,4 +329,7 @@ def create_app(hub, *, token="", manage_workers=True):
     from .voice import install_voice
 
     install_voice(app, hub)
+    from .autonomy import install_autonomy
+
+    install_autonomy(app, hub)
     return app

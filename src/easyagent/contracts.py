@@ -161,7 +161,7 @@ class ModelRequest(Contract):
     prompt: str = ""
     parameters: Json = Field(default_factory=dict)
     attachments: list[str] = Field(default_factory=list, max_length=8)
-    max_output_tokens: int = Field(default=2048, ge=1, le=32768)
+    max_output_tokens: int = Field(default=2048, ge=1, le=262144)
 
 
 class ModelResult(Contract):
@@ -222,7 +222,7 @@ class AgentConfig(Contract):
     skill_namespace: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{1,31}$")
     max_turns: int | None = Field(default=None, ge=1)
     max_tool_calls: int | None = Field(default=None, ge=0)
-    max_output_tokens: int = Field(default=2048, ge=1, le=32768)
+    max_output_tokens: int = Field(default=2048, ge=1, le=262144)
     response_schema: Json | None = None
     policy: str | None = None
     strategy: Literal["react", "plan_execute"] = "react"

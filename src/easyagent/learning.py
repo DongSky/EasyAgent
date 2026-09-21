@@ -150,8 +150,10 @@ class Learning:
             self.hub.tools.register(
                 ToolSpec(
                     name="memory." + name,
-                    description="管理已授权的持久记忆；变更需要确认",
-                    effect="write",
+                    description={"put": "Remember a durable fact in a granted namespace (e.g. user preferences, environment facts, "
+                                        "how a task was solved). value is any JSON; key ≤160 chars; optional expires (unix seconds).",
+                                 "remove": "Forget a remembered key in a granted namespace."}[name],
+                    effect="local",
                     idempotent=True,
                     input_schema={
                         "type": "object",

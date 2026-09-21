@@ -21,8 +21,8 @@ class BuildDraft(Draft):
     required_connections: list[ConnectionRequirement] = Field(default_factory=list, max_length=12)
     planned_steps: list[PlannedStep] = Field(default_factory=list, max_length=64)
     code_candidate: CodeCandidate | None = None
-    research_queries: list[str] = Field(default_factory=list, max_length=2)
-    api_candidates: list[DiscoveredAPI] = Field(default_factory=list, max_length=3)
+    research_queries: list[str] = Field(default_factory=list, max_length=6)
+    api_candidates: list[DiscoveredAPI] = Field(default_factory=list, max_length=8)
 
     @model_validator(mode='after')
     def valid_plan(self):
@@ -64,17 +64,39 @@ def stored(hub, namespace, key):
     return json.loads(row[0]) if row else None
 
 
+def ready_models(hub, capability="decision"):
+    """Explicitly requested aliases first, then the configured default, then every connected model.
+
+    The local echo fixture is never auto-selected: it cannot plan, call tools or judge results.
+    """
+    preferred = hub.connections.default_model()
+    order = list(hub.models.bindings.items())
+    if preferred and preferred in hub.models.bindings:
+        order.sort(key=lambda item: item[0] != preferred)
+    return [(alias, binding) for alias, binding in order
+            if capability in binding.capabilities and not isinstance(binding.provider, MockProvider)]
+
+
 def select_model(hub, requested):
+    """Resolve a model alias for planning or autonomous work.
+
+    "auto" prefers the configured default, then the most recently connected real model; the
+    local echo fixture is never chosen automatically. An explicitly named alias must be a real
+    connected model with structured-output capability, otherwise the caller gets an error.
+    """
     if requested != "auto":
-        candidates = [(requested, hub.models.bindings.get(requested))]
-    else:
-        candidates = list(reversed(list(hub.models.bindings.items())))
-        preferred = hub.connections.default_model()
-        if preferred:
-            candidates = [(preferred, hub.models.bindings.get(preferred))] + candidates
-    for alias, binding in candidates:
-        if binding and "decision" in binding.capabilities and not isinstance(binding.provider, MockProvider):
-            return alias
+        binding = hub.models.bindings.get(requested)
+        if not binding or "decision" not in binding.capabilities or isinstance(binding.provider, MockProvider):
+            raise MissingPlanningModel(
+                "请选择已连接、支持结构化输出的模型；本地回显模型不能编排或自主执行需求。")
+        return requested
+    candidates = [(alias, binding) for alias, binding in reversed(list(hub.models.bindings.items()))
+                  if "decision" in binding.capabilities and not isinstance(binding.provider, MockProvider)]
+    preferred = hub.connections.default_model()
+    if preferred:
+        candidates.sort(key=lambda item: item[0] != preferred)
+    if candidates:
+        return candidates[0][0]
     raise MissingPlanningModel("请先连接支持结构化输出的模型，再生成工作流。本地回显模型不能编排需求。")
 
 
@@ -169,7 +191,7 @@ The runtime will independently
 test the implementation, feed failures back for correction, and register only a passing candidate.
 Prefer existing tools; generate only missing reusable operations. Expose each new tool as a distinct workflow step.
 Do not simulate model capabilities, external effects or successful receipts with code. Keep code_candidate=null when not needed.
-If you need an API or technique not in the catalogs, first request research_queries (at most two public, generic queries).
+If you need an API or technique not in the catalogs, first request research_queries (up to six public, generic queries).
 Do not send user files, private task data, credentials or personal information in a search query.
 The runtime searches available providers, reads documentation and returns evidence for another compilation turn.
 Use that evidence to define api_candidates with source_url, an HTTPTool definition and optional connected service alias.

@@ -459,7 +459,8 @@ async def test_retried_build_graph_animates_without_replacing_nodes(api, monkeyp
     await hub.conversations.send(c['id'], {'text': '创建测试流程', 'intent': 'create'})
     c = await settled(hub, c['id'])
     turn = c['turns'][-1]
-    assert turn['task']['failed_phase'] == 'building'
+    # Both engines report the single `working` phase; `mode` records which one was running.
+    assert turn['task']['failed_phase'] == 'working' and turn['task']['mode'] == 'building'
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch()
         try:

@@ -122,10 +122,15 @@ class CodeDevelopment:
             raise KeyError(identifier)
         if row["status"] not in ("tested", "published"):
             raise Conflict("pass integration scenarios before publishing")
+        p = ExtensionPackage.model_validate(row["package"])
         result = await self.hub.extensions.install({"package": row["package"]})
         with self.hub.store.connect() as db:
             db.execute("UPDATE code_candidates SET status='published' WHERE id=?", (identifier,))
-        return result
+        # Every published pure tool is also a reusable single node in the library.
+        from .code_nodes import save_code_nodes
+
+        save_code_nodes(self.hub, p.manifest)
+        return {**result, "tools": [a.spec.name for a in p.manifest.tools]}
 
     def register(self):
         def grant(args, ctx, propose=False):
@@ -175,13 +180,23 @@ class CodeDevelopment:
                     "required": ["id"],
                     "additionalProperties": False,
                 },
-                "write",
+                "local",
             ),
         ]:
             self.hub.tools.register(
                 ToolSpec(
                     name="code." + name,
-                    description="生成纯计算代码包、集成试跑并发布可复用工具。发布需要确认。",
+                    description={
+                        "create": "Propose a pure JavaScript/WASM tool package (CodeCandidate). manifest.id must start with the granted "
+                                  "namespace + '_'; runtime=javascript, entrypoint=extension.js; files['extension.js'] defines global "
+                                  "handle(request) dispatching request.method to each tool handler with request.params and returning "
+                                  "{result: output}; lifecycle.* returns {result:{}}. Tools use spec.effect='read'. Provide scenarios "
+                                  "(tool,input,expected exact JSON). No imports, network, files or host access. Returns {id, digest, status}.",
+                        "test": "Execute every scenario of a candidate in the isolated runner. Returns {passed, results:[{tool,input,expected,output|error,passed}]}. "
+                                "Fix the code and create a new candidate when a case fails.",
+                        "publish": "Register a tested candidate's tools for this and future workflows; also saves each tool as a library node. "
+                                   "Returns the published tool names.",
+                    }[name],
                     input_schema=schema,
                     effect=effect,
                     idempotent=True,

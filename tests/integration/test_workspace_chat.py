@@ -22,7 +22,7 @@ async def settled(hub, conversation, *, status=None):
             current = hub.conversations.get(conversation)
             if status and current['active_run'] and hub.store.run(current['active_run'])['status'] == status:
                 return current
-            if not status and current['turns'] and all(t['status'] in ('succeeded', 'failed', 'cancelled') for t in current['turns']):
+            if not status and current['turns'] and all(t['status'] in ('succeeded', 'failed', 'cancelled', 'steered') for t in current['turns']):
                 return current
             await asyncio.sleep(.02)
 
@@ -169,6 +169,7 @@ async def test_zero_code_build_save_run_and_reuse_with_document(api):
         return {'action': 'use', 'candidate': context['catalog'][0]['key'], 'confidence': .99, 'message': '复用刚刚创建的流程。'}
 
     remote, calls = provider_app(route, flow)
+    hub.autonomy.configure({'engine': 'compile'})  # This fixture speaks the BuildDraft compiler protocol.
     async with live_server(remote) as endpoint, httpx.AsyncClient(base_url=url) as client:
         hub.models.register('planner', HTTPProvider(endpoint, ''), 'fixture', ['decision', 'chat'])
         upload = (await client.post('/v1/artifacts/upload?name=meeting.md', content=b'# Meeting\nBring the signed form.', headers={'Content-Type': 'text/markdown'})).json()

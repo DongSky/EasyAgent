@@ -126,4 +126,8 @@ async def test_memory_merge_conflict_provenance_and_granted_agent_boundary(hub):
             }
         )
     )
-    assert r["status"] == "failed" and "namespace not granted" in r["steps"][0]["error"]
+    # The ungranted namespace is refused; the refusal reaches the model as an observation, never as data.
+    assert r["status"] == "succeeded"
+    observed = [m for m in r["steps"][0]["state"]["messages"] if m["role"] == "tool"]
+    assert len(observed) == 1 and "namespace not granted" in observed[0]["content"] and "Monday" not in observed[0]["content"]
+    assert "tool.failed_observed" in {e["kind"] for e in hub.store.events(r["id"])}

@@ -569,7 +569,7 @@ class ExtensionHost:
                 "source": package.files[m.entrypoint],
                 "request": request,
                 "memory_mb": m.memory_mb,
-                "timeout_seconds": min(m.timeout_seconds, 5),
+                "timeout_seconds": m.timeout_seconds,
             }
             directory = None
         else:

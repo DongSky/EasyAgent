@@ -24,7 +24,7 @@ class ExecutionSettings(Contract):
     workspace: str = ""
     browser_origins: list[str] = Field(default_factory=list, max_length=50)
     headless: bool = True
-    timeout_seconds: int = Field(default=30, ge=1, le=120)
+    timeout_seconds: int = Field(default=300, ge=1, le=3600)
 
 
 class LocalExecution:
@@ -114,6 +114,9 @@ class LocalExecution:
             raise ToolPreparationError("terminal payload needs argv: an array of executable and arguments")
         if not isinstance(payload.get("cwd", "."), str) or "\x00" in payload.get("cwd", "."):
             raise ToolPreparationError("cwd must be a workspace-relative directory")
+        wait = payload.get("timeout_seconds", s.timeout_seconds)
+        if not isinstance(wait, (int, float)) or isinstance(wait, bool) or not 1 <= wait <= 3600:
+            raise ToolPreparationError("timeout_seconds must be between 1 and 3600")
         cwd = (Path(s.workspace) / payload.get("cwd", ".")).resolve()
         if not cwd.is_relative_to(Path(s.workspace)) or not cwd.is_dir():
             raise ToolPreparationError("working directory exceeds configured workspace")
@@ -142,7 +145,7 @@ class LocalExecution:
             return b"".join(chunks).decode(errors="replace")
 
         try:
-            async with asyncio.timeout(s.timeout_seconds):
+            async with asyncio.timeout(wait):
                 stdout, stderr, _ = await asyncio.gather(
                     read(process.stdout), read(process.stderr), process.wait()
                 )

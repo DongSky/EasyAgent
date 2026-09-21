@@ -18,24 +18,23 @@ from .models import MockProvider, ModelRegistry, ProviderError
 from .skills import SkillRegistry
 from .store import LeaseLost, Store, encode
 from .retry_policy import MODEL_WAIT, attempt_number, error_info, retry_delay
-from .tools import (
+from .tools import (  # noqa: F401  (WaitingInput is re-exported for goals.py and SDK callers)
+    PAUSE_SIGNALS,
     ApprovalRequired,
     ToolRegistry,
     ToolInputError,
     UncertainEffect,
     WaitingChildren,
+    WaitingInput,
     WaitingRemote,
     register_builtins,
+    tool_failure_observation,
 )
 
 logger = logging.getLogger(__name__)
 
 
 class ConditionSkipped(Exception):
-    pass
-
-
-class WaitingInput(Exception):
     pass
 
 
@@ -156,6 +155,8 @@ class Hub:
         self.chat = WorkspaceChat(self)
         from .build_capabilities import BuildCapabilities
         self.build_capabilities = BuildCapabilities(self)
+        from .autonomy import Autonomy
+        self.autonomy = Autonomy(self)
 
     @property
     def mcp(self):
@@ -653,8 +654,6 @@ class Hub:
             while state["pending_index"] < len(state["pending"]):
                 index = state["pending_index"]
                 call = state["pending"][index]
-                if call["name"] not in config.tools:
-                    raise PermissionError("model requested a tool outside the allowlist: " + call["name"])
                 # Count a logical call once, before its first execution, including approval pauses.
                 if not call.get("counted"):
                     if config.max_tool_calls is not None and state["tool_count"] >= config.max_tool_calls:
@@ -662,23 +661,9 @@ class Hub:
                     state["tool_count"] += 1
                     call["counted"] = True
                     self.store.checkpoint(job, state)
-                try:
-                    output = await self.tools.invoke(
-                        self.store,
-                        job,
-                        call["name"],
-                        call["arguments"],
-                        f"turn-{state['turns']}-tool-{index}",
-                        force_approval,
-                    )
-                except ToolInputError as exc:
-                    output = {
-                        "error": {"code": "invalid_tool_arguments", "message": str(exc), "executed": False}
-                    }
-                    with self.store.connect() as db:
-                        self.store.event(
-                            db, job["run_id"], "tool.input_rejected", {"tool": call["name"], **output}
-                        )
+                output = await self.observed_invoke(
+                    job, config, call["name"], call["arguments"], f"turn-{state['turns']}-tool-{index}", force_approval
+                )
                 state["messages"].append(
                     {"role": "tool", "tool_call_id": call["id"], "content": encode(output)}
                 )
@@ -694,7 +679,7 @@ class Hub:
                     messages=state["messages"],
                     tools=[self.tools.spec(name, config.tool_revisions.get(name)) for name in config.tools],
                     response_schema=config.response_schema,
-                    max_output_tokens=config.max_output_tokens,
+                    max_output_tokens=state.get("output_allowance") or config.max_output_tokens,
                     capability="decision" if config.response_schema else "chat",
                 )
             try:
@@ -719,6 +704,40 @@ class Hub:
             state["pending"], state["pending_index"] = json.loads(encode(calls)), 0
             self.store.checkpoint(job, state)
 
+    async def observed_invoke(self, job, config, name, arguments, slot, force_approval):
+        """Run one model-requested tool call; failures return as observations the model can act on.
+
+        Pause signals (approval, waiting children/remote/input, uncertain writes), lost leases,
+        cancellation and explicit run budgets still propagate: they are not the model's to handle.
+        """
+        if name not in config.tools:
+            output = tool_failure_observation(
+                PermissionError("tool is not available in this task: " + name), executed=False,
+                code="unknown_tool")
+            output["error"]["available_tools"] = list(config.tools)[:200]
+            with self.store.connect() as db:
+                self.store.event(db, job["run_id"], "tool.unknown_requested", {"tool": name})
+            return output
+        try:
+            return await self.tools.invoke(self.store, job, name, arguments, slot, force_approval)
+        except ToolInputError as exc:
+            output = tool_failure_observation(exc, executed=False, code="invalid_tool_arguments")
+            with self.store.connect() as db:
+                self.store.event(db, job["run_id"], "tool.input_rejected", {"tool": name, **output})
+            return output
+        except PAUSE_SIGNALS:
+            raise
+        except (LeaseLost, asyncio.CancelledError):
+            raise
+        except Exception as exc:
+            if isinstance(exc, ValueError) and str(exc).startswith("run budget exceeded"):
+                raise
+            output = tool_failure_observation(exc)
+            with self.store.connect() as db:
+                self.store.event(db, job["run_id"], "tool.failed_observed",
+                                 {"tool": name, "code": output["error"]["code"]})
+            return output
+
     async def compact_for_model(self, job, state, config, model, *, overflow=False):
         from .models import HTTPProvider
         binding = self.extensions.provider_binding(model, self.extensions.run_snapshot(job)) or self.models.bindings.get(model)
@@ -727,7 +746,10 @@ class Hub:
         output = min(config.max_output_tokens, limits.get('max_output_tokens', config.max_output_tokens))
         available = limits.get('max_input_tokens')
         if window := limits.get('context_window'):
+            # A large requested allowance must not starve the prompt on a small window.
+            output = min(output, max(1, window // 4))
             available = min(available or window, window - output)
+        state['output_allowance'] = output
         if available is not None:
             ratio = limits.get('tokens_per_byte', 1)
             overhead = len(encode({'tools': [self.tools.spec(n, config.tool_revisions.get(n)).model_dump()
@@ -1067,27 +1089,15 @@ class Hub:
             index = state.get("plan_index", 0)
             while index < len(plan):
                 action = plan[index]
-                if action["tool"] not in config.tools:
-                    raise PermissionError("planner requested an unauthorized tool")
                 if not action.get("counted"):
                     if config.max_tool_calls is not None and state["tool_count"] >= config.max_tool_calls:
                         raise ValueError("planner tool budget exhausted")
                     state["tool_count"] += 1
                     action["counted"] = True
                     self.store.checkpoint(job, state)
-                try:
-                    output = await self.tools.invoke(
-                        self.store,
-                        job,
-                        action["tool"],
-                        action["arguments"],
-                        f"plan-{state['turns']}-{index}",
-                        force_approval,
-                    )
-                except ToolInputError as exc:
-                    output = {
-                        "error": {"code": "invalid_tool_arguments", "message": str(exc), "executed": False}
-                    }
+                output = await self.observed_invoke(
+                    job, config, action["tool"], action["arguments"], f"plan-{state['turns']}-{index}", force_approval
+                )
                 state["messages"].append(
                     {
                         "role": "user",
@@ -1116,7 +1126,7 @@ class Hub:
                     capability="decision",
                     messages=[instruction, *state["messages"]],
                     response_schema=schema,
-                    max_output_tokens=config.max_output_tokens,
+                    max_output_tokens=state.get("output_allowance") or config.max_output_tokens,
                 )
             try:
                 result = await self.generate(job, request)

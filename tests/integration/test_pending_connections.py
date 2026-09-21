@@ -3,6 +3,7 @@ import asyncio
 import json
 
 import httpx
+import pytest
 from fastapi import FastAPI, Request
 from playwright.async_api import async_playwright, expect
 
@@ -10,6 +11,12 @@ from conftest import live_server
 from easyagent.api import create_app
 from easyagent.runtime import Hub
 from easyagent.studio import install_studio
+
+
+@pytest.fixture(autouse=True)
+def compile_engine(hub):
+    # These fixtures speak the BuildDraft compiler protocol; the autonomous operator has its own tests.
+    hub.autonomy.configure({'engine': 'compile'})
 
 
 async def phase(hub, conversation, wanted):

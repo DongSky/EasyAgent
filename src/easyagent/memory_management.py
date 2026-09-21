@@ -44,7 +44,7 @@ class MemoryManagement:
                 name="memory.merge",
                 description="合并已授权的记忆，核验原文摘要，保留来源与撤销记录",
                 input_schema=schema,
-                effect="write",
+                effect="local",
                 idempotent=True,
             ),
             merge,

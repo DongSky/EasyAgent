@@ -1,5 +1,5 @@
-import {stepStatus} from './run-status.js?v=20260921-auto-7';
-import {retryPanel,bindRetry} from './run-retry.js?v=20260921-auto-7';
+import {stepStatus} from './run-status.js?v=20260921-operator-8';
+import {retryPanel,bindRetry} from './run-retry.js?v=20260921-operator-8';
 import {modelChoices} from './model-choice.js';
 import {toolLabels} from './ui-labels.js';
 import {formatChat} from './chat-format.js';
@@ -16,7 +16,40 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
   document.querySelector('main').append(page);
   const $=s=>page.querySelector(s),guard=fn=>async e=>{try{await fn(e)}catch(error){$('[data-error]').textContent=error.message;$('[data-error]').hidden=false;flash(error.message);}};
   const floating=document.createElement('button');floating.className='chat-launcher';floating.innerHTML='<span aria-hidden="true">✦</span> 对话办事';floating.setAttribute('aria-label','打开对话办事入口');floating.onclick=()=>nav.click();document.body.append(floating);
-  let selected=null,polling=false,sending=false,uploading=0,files=[],catalog=[],historyRows=[],signature='',searchTimer=null,modelList=[],defaultModel=null,chosenModel=localStorage.getItem('easyagent.workspaceModel')||'auto',modelBusy=false,turnBusy=false;
+  let selected=null,polling=false,sending=false,uploading=0,files=[],catalog=[],historyRows=[],signature='',searchTimer=null,modelList=[],defaultModel=null,chosenModel=localStorage.getItem('easyagent.workspaceModel')||'auto',modelBusy=false,turnBusy=false,workingTurn=null;
+  const noiseKinds=new Set(['run.status']);
+  const activityLabels={'tool.started':'调用','tool.succeeded':'完成','tool.failed_observed':'失败并反馈给助手','tool.input_rejected':'参数被拒绝，助手将修正','tool.unknown_requested':'请求了不存在的工具','tool.approval_required':'等待你确认','tool.authorized':'已按自动执行授权','model.started':'思考中','definition.saved':'已保存定义','run.created':'启动子任务','agent.recovering':'恢复上下文','context.compacted':'压缩历史','input.requested':'等待你补充信息','session.steered':'已接收补充要求'};
+  function activityHTML(events){
+    const rows=[];
+    for(const ev of events){const p=ev.payload||{},kind=ev.kind;let text=null;
+      if(noiseKinds.has(kind))continue;
+      if(kind==='tool.started')text='调用 '+(toolLabels[p.tool]||p.tool);
+      else if(kind==='tool.succeeded')text='✓ '+(toolLabels[p.tool]||p.tool);
+      else if(kind==='tool.failed_observed'||kind==='tool.input_rejected')text='✗ '+(toolLabels[p.tool]||p.tool)+' · '+(kind==='tool.failed_observed'?'失败（'+(p.code||'')+'），已反馈给助手修正':'参数无效，助手将修正');
+      else if(kind==='tool.unknown_requested')text='✗ 请求了不存在的工具 '+p.tool+'，已告知助手';
+      else if(kind==='tool.approval_required')text='Ⅱ 等待你确认 '+(toolLabels[p.tool]||p.tool);
+      else if(kind==='definition.saved')text='💾 已保存'+({workflow:'流程',api:'接口节点',node:'节点',component:'组件'}[p.kind]||p.kind)+' '+p.id+' v'+p.revision;
+      else if(kind==='model.started')text='… 思考中';
+      else if(kind==='agent.recovering')text='↻ '+(p.reason==='context_overflow'?'上下文已满，已压缩后继续':'输出被截断，已要求分步继续');
+      else if(kind==='input.requested')text='Ⅱ 等待你补充：'+(p.prompt||'');
+      else if(kind==='session.steered')text='✦ 已接收你的补充要求';
+      if(text)rows.push({text,kind,time:ev.created});}
+    const shown=rows.slice(-40);
+    return shown.map(r=>`<div class="chat-activity-row kind-${escape(r.kind.replace(/\./g,'-'))}"><small>${new Date(r.time*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'})}</small><span>${escape(r.text)}</span></div>`).join('')+(rows.length>40?`<p class="muted">仅显示最近 40 条，共 ${rows.length} 条</p>`:'');
+  }
+  async function updateActivity(entry,run){
+    const slot=entry.root.querySelector('[data-activity]');
+    if(!run?.spec?.metadata?.operator){slot.hidden=true;return;}
+    if(entry.eventRun!==run.id){entry.eventRun=run.id;entry.events=[];entry.eventCursor=0;}
+    const fresh=await api(`/v1/runs/${run.id}/events?after=${entry.eventCursor}`);
+    for(const ev of fresh){entry.eventCursor=Math.max(entry.eventCursor,ev.id||0);entry.events.push(ev);}
+    if(!fresh.length&&slot.dataset.rendered===String(entry.eventCursor))return;
+    slot.dataset.rendered=String(entry.eventCursor);slot.hidden=false;
+    const running=['queued','running'].includes(run.status);
+    slot.innerHTML=`<details ${running||!slot.dataset.userClosed?'open':''}><summary>活动记录 · ${entry.events.filter(e=>e.kind==='tool.succeeded').length} 次工具调用${running?' · 进行中':''}</summary><div class="chat-activity-list">${activityHTML(entry.events)}</div></details>`;
+    slot.querySelector('details').ontoggle=e=>{slot.dataset.userClosed=e.target.open?'':'1';};
+    if(running){const list=slot.querySelector('.chat-activity-list');list.scrollTop=list.scrollHeight;}
+  }
   function drawModel(){modelChoices($('[data-model]'),modelList,chosenModel,defaultModel);$('[data-model]').disabled=turnBusy||sending||modelBusy;}
   async function loadModels(){const data=await api('/v1/studio/connections');modelList=data.connections;defaultModel=data.default_model;drawModel();}
   $('[data-model]').onchange=guard(async()=>{
@@ -83,6 +116,7 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
       const id=selected;
       // Retain the key on transport failure so retry cannot duplicate a model call or run.
       const payload={text,attachments,execution:$('[data-execution]').value,intent:['auto','create','chat'].includes(destination)?destination:'workflow',...(!['auto','create','chat'].includes(destination)?{workflow:destination}:{})};
+      if(workingTurn&&destination==='auto')payload.mode='steer';
       const fingerprint=JSON.stringify({id,...payload});if(send.fingerprint!==fingerprint){send.fingerprint=fingerprint;send.key=crypto.randomUUID();}
       await api(`/v1/conversations/${id}/messages`,'POST',{...payload,idempotency_key:send.key});
       if(id===selected){$('[data-text]').value='';files=[];drafts.delete('new');drafts.delete(id);drawFiles();await refresh();scrollEnd(true);}send.fingerprint=null;await listing();
@@ -152,30 +186,32 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
   function ensureCard(turn){
     let entry=cards.get(turn.id);if(entry)return entry;
     const root=document.createElement('article');root.className='chat-turn';root.dataset.turn=turn.id;
-    root.innerHTML='<div class="chat-user-message"><small>你</small><div data-user></div><div class="chat-sent-files" data-sent-files></div></div><div class="chat-task-card"><div data-card-heading></div><div data-graph></div><div data-choices class="chat-choices"></div><div class="chat-result-message" data-reply></div><div data-setup></div><div data-retry></div><div class="chat-result-media" data-media></div><div class="chat-task-actions"><button class="text-button" data-details-toggle aria-expanded="false">展开步骤与结果</button><button class="text-button" data-edit hidden>在画布中打开 ↗</button></div><div class="chat-task-details" data-details hidden></div></div>';
-    entry={root,details:root.querySelector('[data-details]'),media:root.querySelector('[data-media]'),lastDetail:'',lastMedia:'',lastGraph:''};cards.set(turn.id,entry);$('[data-timeline]').append(root);
+    root.innerHTML='<div class="chat-user-message"><small>你</small><div data-user></div><div class="chat-sent-files" data-sent-files></div></div><div class="chat-task-card"><div data-card-heading></div><div data-graph></div><div class="chat-activity" data-activity hidden></div><div data-choices class="chat-choices"></div><div class="chat-result-message" data-reply></div><div data-setup></div><div data-retry></div><div class="chat-result-media" data-media></div><div class="chat-task-actions"><button class="text-button" data-details-toggle aria-expanded="false">展开步骤与结果</button><button class="text-button" data-edit hidden>在画布中打开 ↗</button></div><div class="chat-task-details" data-details hidden></div></div>';
+    entry={root,details:root.querySelector('[data-details]'),media:root.querySelector('[data-media]'),lastDetail:'',lastMedia:'',lastGraph:'',events:[],eventCursor:0,eventRun:null};cards.set(turn.id,entry);$('[data-timeline]').append(root);
     root.querySelector('[data-details-toggle]').onclick=guard(async e=>{entry.details.hidden=!entry.details.hidden;e.currentTarget.setAttribute('aria-expanded',String(!entry.details.hidden));e.currentTarget.textContent=entry.details.hidden?'展开步骤与结果':'收起步骤与结果';if(entry.details.hidden)stopWatch(entry.details);else if(entry.run)renderRun(entry.run,entry.details);});
     return entry;
   }
   async function paint(c){
     const history=historyRows.find(r=>r.id===c.id);if(history&&history.active_run!==c.active_run){history.active_run=c.active_run;drawHistory();}
-    chosenModel=c.model;turnBusy=!!c.active_run||c.turns.some(t=>!['succeeded','failed','cancelled','waiting_connections'].includes(t.status));drawModel();
+    chosenModel=c.model;turnBusy=!!c.active_run||c.turns.some(t=>!['succeeded','failed','cancelled','waiting_connections','steered'].includes(t.status));drawModel();
+    workingTurn=c.turns.find(t=>['starting','running'].includes(t.status)&&t.task?.phase?.startsWith('working'))||null;
+    $('[data-send]').textContent=workingTurn?'补充要求 ↑':'发送 ↑';$('[data-text]').placeholder=workingTurn?'任务正在自主处理；发送的内容会补充给它':'输入需求，或拖入附件';
     const pinned=nearBottom();$('[data-title]').textContent=c.title;$('[data-welcome]').hidden=c.turns.length>0;$('[data-stop]').hidden=!c.turns.some(t=>!['succeeded','failed','cancelled'].includes(t.status));
     for(const turn of c.turns){
       const state=turn.task;if(!state)continue;const entry=ensureCard(turn),root=entry.root,find=s=>root.querySelector(s);
       find('[data-user]').textContent=turn.text;
       const attachments=state.attachments||[];find('[data-sent-files]').innerHTML=attachments.map(a=>`<button data-file="${escape(a.id)}">${glyph(a.kind)} ${escape(a.name)}</button>`).join('');find('[data-sent-files]').querySelectorAll('button').forEach(b=>b.onclick=guard(()=>downloadArtifact(attachments.find(a=>a.id===b.dataset.file))));
       let run=null;if(state.run_id){run=runCache.get(state.run_id);if(!run||!['succeeded','failed','cancelled'].includes(run.status)||['starting','running'].includes(turn.status)){run=await api('/v1/runs/'+state.run_id);runCache.set(run.id,run);}if(c.id!==selected)return;entry.run=run;}
-      const labels={queued:'已收到',routing:'正在匹配合适的流程',building:'正在创建新流程',executing:'正在执行',completed:'处理完成',waiting_connections:'已保存 · 等待连接模型或服务',superseded:'已合并到后续消息',clarification:'需要补充一点信息',answered:'回复',failed:'处理遇到问题',cancelled:'已停止'};
+      const labels={queued:'已收到',routing:'正在匹配合适的流程',building:'正在创建新流程',working:'正在自主处理',executing:'正在执行',completed:'处理完成',waiting_connections:'已保存 · 等待连接模型或服务',superseded:'已合并到后续消息',steered:'已补充到当前任务',clarification:'需要补充一点信息',answered:'回复',failed:'处理遇到问题',cancelled:'已停止'};
       const title=state.selected?.title||labels[state.phase]||'正在安排';
       const finished=run?.steps.filter(s=>['succeeded','skipped'].includes(s.status)).length||0;
-      const active=run?['queued','running'].includes(run.status):['queued','routing','building','executing'].includes(state.phase);
+      const active=run?['queued','running'].includes(run.status):['queued','routing','building','working','executing'].includes(state.phase);
       const retryWaiting=run?.steps.some(s=>s.status==='retrying')&&!run.steps.some(s=>s.status==='running');
-      const label=retryWaiting?'等待自动重试':active&&state.phase==='failed'?'正在继续处理':run&&state.phase==='executing'?statuses[run.status]||run.status:labels[state.phase]||'正在安排';
+      const label=retryWaiting?'等待自动重试':active&&state.phase==='failed'?'正在继续处理':run&&['executing','working'].includes(state.phase)?(state.phase==='working'&&['queued','running'].includes(run.status)?'正在自主处理':statuses[run.status]||run.status):labels[state.phase]||'正在安排';
       const heading=`<div class="chat-task-heading"><span class="chat-task-mark ${active?'is-working':''}">${active?'✦':state.phase==='completed'?'✓':state.phase==='failed'?'!':'✦'}</span><div><b>${escape(title)}</b><p>${escape(label)}${state.selected?' · 固定版本 v'+state.selected.revision:''}</p></div>${run&&['executing','completed'].includes(state.phase)?`<span class="chat-step-count">${finished}/${run.steps.length}</span>`:''}</div>${state.reason?`<p class="chat-route-reason">${escape(state.reason)}</p>`:''}`;
       if(heading!==entry.lastHeading){entry.lastHeading=heading;find('[data-card-heading]').innerHTML=heading;}
-      if(run)updateGraph(entry,run);
-      const message=c.messages.filter(m=>m.turn_id===turn.id&&m.role==='assistant').at(-1);find('[data-reply]').innerHTML=formatChat(message?.content||(['clarification','failed','waiting_connections','superseded'].includes(state.phase)?state.message:''),escape);
+      if(run){updateGraph(entry,run);await updateActivity(entry,run);if(c.id!==selected)return;}
+      const message=c.messages.filter(m=>m.turn_id===turn.id&&m.role==='assistant').at(-1);find('[data-reply]').innerHTML=formatChat(message?.content||(['clarification','failed','waiting_connections','superseded','steered'].includes(state.phase)?state.message:''),escape);
       find('[data-choices]').innerHTML=(state.choices||[]).map(choice=>`<button data-choice="${escape(choice.key)}">使用 ${escape(choice.title)} →</button>`).join('');find('[data-choices]').querySelectorAll('button').forEach(b=>b.onclick=guard(async()=>{await loadCatalog();$('[data-destination]').value=b.dataset.choice;if(!$('[data-destination]').value)throw Error('流程版本已更新，请在列表重新选择。');$('[data-text]').value=turn.text;files=[...attachments];drawFiles();await send();}));
       const setup=find('[data-setup]');
       setup.innerHTML=state.phase==='waiting_connections'?`<div class="notice"><ul>${(state.required_connections||[]).map(r=>`<li><b>${escape(r.title)}</b><p>${escape(r.reason)}</p></li>`).join('')}</ul><div class="actions"><button data-setup-connect>去连接模型或服务</button><button data-setup-resume ${state.can_resume?'':'disabled'}>识别连接并继续</button></div><p class="muted">需求和附件已保留。连接后返回本对话会继续检查，也可以发送补充说明。</p></div>${state.planned_steps?.length?'<h3>步骤草稿 · 待接入</h3><ol>'+state.planned_steps.map(s=>'<li><b>'+escape(s.title)+'</b><p>'+escape(s.description)+'</p><small>等待：'+escape(s.depends_on.map(id=>state.planned_steps.find(step=>step.id===id)?.title||id).join('、')||'无前置步骤')+'</small></li>').join('')+'</ol>':''}${state.blueprint?'<details><summary>查看已保存的流程草稿（待验证）</summary><ol>'+state.blueprint.steps.map(s=>'<li>'+escape(state.blueprint.metadata?.step_labels?.[s.id]||s.id)+'</li>').join('')+'</ol></details>':''}`:'';

@@ -259,9 +259,11 @@ class SkillPackages:
         self.hub.tools.register(
             ToolSpec(
                 name="skills.save",
-                description="Create/update an instruction package in the granted skill namespace. Does not execute scripts.",
+                description="Create/update a reusable instruction package (skill) in the granted skill namespace. package.files['SKILL.md'] "
+                            "needs YAML frontmatter with name (lowercase kebab-case, prefixed by the namespace + '-') and description, then Markdown "
+                            "steps. Add references/*.md for details. expected_revision=0 creates; updates need the current revision. Does not execute scripts.",
                 input_schema=SkillInstall.model_json_schema(),
-                effect="write",
+                effect="local",
                 idempotent=True,
             ),
             save,

@@ -69,6 +69,8 @@ class DelegatingModel:
         if model == "child":
             return ModelResult(text="child finished", usage={"mock": True})
         observations = [json.loads(m["content"]) for m in request.messages if m["role"] == "tool"]
+        if observations and isinstance(observations[-1].get("error"), dict):
+            return ModelResult(text="refused: " + observations[-1]["error"]["message"], usage={"mock": True})
         if not observations:
             return ModelResult(
                 tool_calls=[
@@ -115,4 +117,6 @@ async def test_dynamic_delegation_single_worker_and_capability_denial(hub):
     assert run["usage"]["child_runs"] == 1
     flow["steps"][0]["input"]["delegation"]["models"] = []
     denied = await hub.wait(hub.submit(flow))
-    assert denied["status"] == "failed" and "grant" in denied["steps"][0]["error"]
+    # The parent learns about the refusal instead of crashing; no child is created.
+    assert denied["status"] == "succeeded" and "grant" in denied["steps"][0]["output"]["text"]
+    assert denied["usage"]["child_runs"] == 0 and not denied["children"]

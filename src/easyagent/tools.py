@@ -58,6 +58,29 @@ class WaitingRemote(Exception):
         self.delay = delay
 
 
+class WaitingInput(Exception):
+    """Suspend until a person answers a durable input request; no attempt is consumed."""
+
+
+# Pause signals travel through tool handlers unchanged; they are not tool failures.
+PAUSE_SIGNALS = (WaitingChildren, WaitingRemote, WaitingInput, ApprovalRequired, UncertainEffect)
+
+
+def redact_error(text, limit=2000):
+    """Bearer tokens, API keys and signed URLs never enter model context through error text."""
+    import re
+
+    return re.sub(r"(?i)(bearer\s+\S+|sk-[A-Za-z0-9_-]{8,}|api[_-]?key=[^&\s]+|https?://\S+\?\S+)",
+                  "[redacted]", str(text))[:limit]
+
+
+def tool_failure_observation(exc, *, executed=None, code=None):
+    """Describe a failed tool call for the model. Prepared/rejected errors were never sent."""
+    not_performed = isinstance(exc, (ToolInputError, ToolPreparationError, ToolRejectedError))
+    return {"error": {"code": code or type(exc).__name__, "message": redact_error(exc),
+                      "executed": (not not_performed) if executed is None else executed}}
+
+
 @dataclass
 class InvocationContext:
     invocation_id: str
@@ -254,7 +277,7 @@ class ToolRegistry:
             encoded = encode(result)
             if len(encoded.encode()) > 1_000_000:
                 raise ValueError("tool output exceeds 1 MB; store artifacts externally")
-        except (WaitingChildren, WaitingRemote, ApprovalRequired, UncertainEffect):
+        except PAUSE_SIGNALS:
             raise
         except BaseException as exc:
             if self.extensions and not isinstance(exc, asyncio.CancelledError):

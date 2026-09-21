@@ -89,6 +89,9 @@ class SearchConnections:
     def __init__(self, hub):
         self.hub = hub
         self.options = {}
+        # Tool names this manager owns. A saved connection may rebind its own name; it may
+        # never take over a tool that belongs to an extension, adapter or another provider.
+        self.owned = set()
         self.saved = {r['key']: r['value'] for r in hub.store.memory_search('search-connections', limit=1000)}
         for options in self.saved.values():
             self.install(options)
@@ -101,11 +104,16 @@ class SearchConnections:
     def definition(self, options):
         return tinyfish_definition({k: v for k, v in options.items() if k != 'credential'})
 
+    def conflict(self, name):
+        """A name is only free when it is unowned or owned by this manager."""
+        return name in self.hub.tools.entries and name not in self.owned
+
     def install(self, options):
         definition = self.definition(options)
         name = definition.name
-        if name in self.hub.tools.entries and name not in self.options:
+        if self.conflict(name):
             raise ValueError('search name is already used by another tool')
+        self.owned.add(name)
         spec = ToolSpec(name=name, description=definition.description, input_schema=definition.input_schema,
                         output_schema=definition.output_schema, effect='read', idempotent=True)
         self.options[name] = dict(options)
@@ -134,7 +142,7 @@ class SearchConnections:
         body = TinyFishConnection.model_validate(connection)
         # Validate the endpoint, tool identity and header values before changing a saved credential.
         definition = tinyfish_definition(body)
-        if body.name in self.hub.tools.entries and body.name not in self.options:
+        if self.conflict(body.name):
             raise ValueError('search name is already used by another tool')
         options = body.model_dump(exclude={'api_key'}, exclude_none=True)
         prior = self.options.get(body.name, {})

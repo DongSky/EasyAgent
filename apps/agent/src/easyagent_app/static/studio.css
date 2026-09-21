@@ -97,3 +97,5 @@
 }
 
 .chat-composer-top{flex-wrap:wrap}.chat-composer-top .chat-model-choice{display:flex;align-items:center;gap:6px;font-size:11px;max-width:100%;white-space:nowrap}.chat-model-choice select{max-width:260px}.connection-models .saved-row{flex-wrap:wrap;gap:12px}.connection-models [data-default-model]{max-width:480px}
+
+.chat-activity{margin:6px 18px 4px}.chat-activity[hidden]{display:none}.chat-activity summary{font-size:11px;color:#6c8360;cursor:pointer;padding:4px 0}.chat-activity-list{max-height:220px;overflow:auto;border:1px solid #e8eee2;border-radius:10px;background:#fafbf8;padding:6px 10px;margin-top:4px}.chat-activity-row{display:flex;gap:10px;align-items:baseline;font-size:11px;line-height:1.7;color:#4c5e48}.chat-activity-row small{color:#9aa398;font-variant-numeric:tabular-nums;flex-shrink:0}.chat-activity-row.kind-tool-failed_observed span,.chat-activity-row.kind-tool-input_rejected span,.chat-activity-row.kind-tool-unknown_requested span{color:#a3624a}.chat-activity-row.kind-tool-succeeded span{color:#5a7f4a}.chat-activity-row.kind-definition-saved span{color:#3f6a8a}.chat-activity-row.kind-model-started span{color:#8b9881}

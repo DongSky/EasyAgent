@@ -132,10 +132,16 @@ async def test_agent_checkpoints_allowlist_budget_and_approval(hub):
     run = await hub.wait(run_id)
     assert run["status"] == "succeeded"
     assert run["steps"][0]["output"]["tool_count"] == 1
-    for options in ({"tools": ["core.echo"], "max_tool_calls": 0}, {"tools": ["memory.search"]}):
-        failed = hub.submit({"name": "blocked", "steps": [{"id": "a", "kind": "agent", "target": "mock", "input": {
-            "prompt": '{"tool":"core.echo","arguments":{}}', **options}}]})
-        assert (await hub.wait(failed))["status"] == "failed"
+    failed = hub.submit({"name": "blocked", "steps": [{"id": "a", "kind": "agent", "target": "mock", "input": {
+        "prompt": '{"tool":"core.echo","arguments":{}}', "tools": ["core.echo"], "max_tool_calls": 0}}]})
+    assert (await hub.wait(failed))["status"] == "failed"
+    # A tool outside the allowlist is never executed; the model sees the refusal as an observation instead.
+    refused = hub.submit({"name": "refused", "steps": [{"id": "a", "kind": "agent", "target": "mock", "input": {
+        "prompt": '{"tool":"core.echo","arguments":{}}', "tools": ["memory.search"]}}]})
+    outcome = await hub.wait(refused)
+    assert outcome["status"] == "succeeded" and outcome["steps"][0]["output"]["tool_count"] == 1
+    kinds = [e["kind"] for e in hub.store.events(refused)]
+    assert "tool.unknown_requested" in kinds and "tool.started" not in kinds
 
 
 async def test_schema_failure_prevents_side_effect_and_memory_persists(hub, tmp_path):

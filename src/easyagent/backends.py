@@ -165,6 +165,8 @@ class BackendRegistry:
                     "command": {"type": "string", "minLength": 1, "maxLength": 16000},
                     "python": {"type": "string", "minLength": 1, "maxLength": 16000},
                     "cwd": {"type": "string", "description": "Directory inside configured workspace; defaults to ."},
+                    "timeout_seconds": {"type": "number", "minimum": 1, "maximum": 3600,
+                                        "description": "Wall-clock limit for this command; defaults to the workspace setting"},
                 }}
 
             async def handler(args, ctx, kind=kind):

@@ -108,9 +108,10 @@ async def retry_run(hub, run_id, body):
                 if turn['chat_state']:
                     state = json.loads(turn['chat_state'])
                     spec = json.loads(run['spec'])
-                    state['phase'] = state.pop('failed_phase', None) or (
-                        'building' if spec.get('metadata', {}).get('assistant_builder') else
-                        'routing' if state.get('route_workflow') and not state.get('selected') else 'executing')
+                    # Both engines resume inside the single `working` phase; `mode` marks the compiler.
+                    state['phase'] = state.pop('failed_phase', None) or 'working'
+                    if state.get('phase') == 'working' and spec.get('metadata', {}).get('assistant_builder'):
+                        state['mode'] = 'building'
                     state['message'] = '正在从失败处继续，已完成步骤和附件已保留。'
                     db.execute('UPDATE conversation_jobs SET state=? WHERE turn_id=?', (encode(state), turn['id']))
                 db.execute("UPDATE conversation_turns SET status='running' WHERE id=?", (turn['id'],))

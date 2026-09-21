@@ -56,7 +56,7 @@ Inspect the inputs, results, and errors for every step. Runs can pause for missi
 
 ### Run tasks and follow through
 
-- **Chat workspace**: send a request with images, audio, video, or documents. Match a saved workflow or create and save a new one, then follow its progress, handle approvals, and download results in the conversation.
+- **Chat workspace**: send a request with images, audio, video, or documents. A saved workflow is matched when one fits; otherwise an autonomous operator agent takes the task end to end: it searches and reads documentation, runs scripts in the local terminal, writes, tests and publishes new code nodes, defines HTTP adapters from documentation, delegates independent sub-tasks to parallel sub-agents, and saves repeatable work as a reusable workflow. Tool failures come back to it as observations to correct; finished tasks are remembered and distilled into `learned-*` skills. See [docs/AUTONOMY.md](docs/AUTONOMY.md).
 - **Workflow orchestration**: conditional branches, parallel steps, loops, subworkflows, and multi-agent collaboration.
 - **Run history**: inspect progress, files, and errors; handle approvals and missing input; cancel runs or resume from saved progress.
 - **Repair and improvement**: check whether a goal was met, create workflow revisions or code nodes, and evaluate proposed improvements under configured permissions, budgets, and approval rules.

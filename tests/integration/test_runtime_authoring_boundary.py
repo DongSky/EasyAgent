@@ -20,7 +20,8 @@ class AuthorModel:
 
     async def generate(self, request, model):
         observed = [json.loads(m['content']) for m in request.messages if m['role'] == 'tool']
-        index = len(observed)
+        # A failed call comes back as an observation; a careful author simply repeats it.
+        index = len([o for o in observed if not isinstance(o.get('error'), dict)])
         if index == len(self.actions):
             return ModelResult(text=json.dumps(observed))
         name, arguments = self.actions[index]
@@ -95,7 +96,10 @@ async def test_agent_authors_updates_executes_and_recovers_committed_save(tmp_pa
         finally:
             await hub.stop()
         assert run['status'] == 'succeeded', run
-        observed = json.loads(run['steps'][0]['output']['text'])
+        everything = json.loads(run['steps'][0]['output']['text'])
+        failures = [item for item in everything if isinstance(item.get('error'), dict)]
+        assert len(failures) == 1 and 'lost acknowledgement' in failures[0]['error']['message'], failures
+        observed = [item for item in everything if not isinstance(item.get('error'), dict)]
         assert all('error' not in item for item in observed), observed
         assert 'POST /evaluate' in observed[1]['text']
         assert observed[4]['outputs']['classify']['transport'] == 'body'

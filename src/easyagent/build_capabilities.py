@@ -1,15 +1,16 @@
 """Discover connected capabilities and verify generated nodes before compiling a task."""
 from __future__ import annotations
 
-import hashlib
 import asyncio
+import hashlib
 import json
-from urllib.parse import urlsplit
 
 from pydantic import Field, ValidationError as ContractError
 from jsonschema import ValidationError, SchemaError, validate
 
+from .api_binding import bind_api_definition
 from .code_development import CodeScenario
+from .code_nodes import save_code_nodes
 from .contracts import Contract, ModelRequest, ToolSpec
 from .http_tools import HTTPTool, export_definition
 from .models import HTTPProvider
@@ -18,7 +19,7 @@ from .store import encode
 
 
 class IndependentChecks(Contract):
-    scenarios: list[CodeScenario] = Field(min_length=2, max_length=12)
+    scenarios: list[CodeScenario] = Field(min_length=2, max_length=64)
 
 
 class DiscoveredAPI(Contract):
@@ -200,6 +201,14 @@ class BuildCapabilities:
             if not result.get('errors'):
                 return result
             state = ctx.job['state']
+            # Repairing the identical draft against the identical errors twice is stagnation, not
+            # progress: report it instead of spending model calls forever on the same loop.
+            signature = hashlib.sha256(encode([result['draft'], result['errors']]).encode()).hexdigest()
+            seen = state.get('repair_signatures', [])
+            if seen.count(signature) >= 2:
+                return {**result, 'stalled': True, 'errors': [*result['errors'],
+                        '构建器连续多轮未能修正同一问题，已停止重复尝试；可以补充说明后重新生成。']}
+            self.checkpoint(ctx, state, repair_signatures=[*seen, signature][-8:])
             run = self.hub.store.run(ctx.run_id)
             original = run['spec']['steps'][0]['input']['messages']
             content = json.loads(original[-1]['content'])
@@ -301,7 +310,7 @@ class BuildCapabilities:
                     checks = await self.ask(ctx, args['model'], IndependentChecks.model_json_schema(),
                         'Write independent executable input/expected tests from the requirement and tool schemas. '
                         'Cover every tool, normal and boundary inputs. Expected results must follow the requirement. '
-                        'Use 2 to 4 VALID input cases per tool, at most 12 total. Each case has ONLY tool, input, expected. '
+                        'Use 2 to 8 VALID input cases per tool, at most 64 total. Each case has ONLY tool, input, expected. '
                         'expected is the exact output JSON, not a description, assertion or expected error. '
                         'Do not weaken tests to fit an implementation. Pure deterministic processing only.',
                         {'requirement': args['assistant']['purpose'], 'tools': [t.spec.model_dump() for t in code.manifest.tools]},
@@ -340,10 +349,11 @@ class BuildCapabilities:
                             self.hub.tools.versions.pop(key, None)
                         else:
                             self.hub.tools.versions[key] = entry
-                # Only restricted JS/WASM tools with zero host permissions reach publication.
+                # Only restricted JS/WASM tools with zero host permissions reach publication;
+                # publication also registers each tool as a library node.
                 await self.hub.code.publish(candidate['id'])
+                save_code_nodes(self.hub, code.manifest)
                 self.save_skill(args, namespace, code, state['development'])
-                self.save_nodes(code)
                 return {'draft': draft.model_dump(), 'tools': [*created, *names], 'development': state['development']}
             except (ValueError, KeyError, PermissionError, ValidationError, SchemaError) as exc:
                 self.checkpoint(ctx, state, last_error=type(exc).__name__ + ': ' + str(exc)[:1500])
@@ -358,62 +368,12 @@ class BuildCapabilities:
                      'code_namespace': namespace, 'revision': revision}, check=BuildDraft.model_validate)
                 self.checkpoint(ctx, state, draft=repaired, attempt=state['attempt'] + 1)
 
-    def save_nodes(self, code):
-        from .node_library import PublishComponent
-        for tool in code.manifest.tools:
-            name = tool.spec.name
-            definition = {'input_schema': tool.spec.input_schema, 'output_schema': tool.spec.output_schema,
-                          'step': {'id': 'execute', 'target': name,
-                                   'input': {'$ref': '$input'}}}
-            try:
-                previous = self.hub.development.get('node', name)
-                revision = previous['revision']
-            except KeyError:
-                revision = 0
-            saved = self.hub.library.save_node({'id': name, 'definition': definition, 'expected_revision': revision})
-            try:
-                manifest = self.hub.library.get(name)
-                previous_revision = manifest.revision
-            except KeyError:
-                previous_revision = 0
-            self.hub.library.publish(PublishComponent(id=name, kind='node', source_id=name,
-                source_revision=saved['revision'], expected_revision=previous_revision,
-                title=tool.title or tool.spec.description or name, description=tool.spec.description or name),
-                validation='protocol_integration')
-
     async def install_api(self, api, namespace, evidence):
-        from .capability_research import public_url
         if api.source_url not in {row.get('url') for row in evidence if row.get('text')}:
             raise ValueError('API definition must cite documentation actually read during this build')
-        definition = api.definition.model_copy(deep=True)
-        if not definition.name.startswith(namespace + '.'):
-            raise PermissionError('new API must use the build namespace')
-        if definition.api_key or definition.api_key_env or definition.headers:
+        if api.definition.headers:
             raise PermissionError('generated definitions cannot supply credentials or headers')
-        if api.service:
-            binding = self.hub.models.bindings.get(api.service)
-            if not binding or not isinstance(binding.provider, HTTPProvider):
-                raise ValueError('service is not connected')
-            target, source = urlsplit(definition.url), urlsplit(binding.provider.base_url)
-            if (target.scheme, target.netloc) != (source.scheme, source.netloc):
-                raise PermissionError('connected credentials cannot be sent to a different service')
-            if binding.provider.api_key:
-                credential = 'adapter.' + hashlib.sha256(api.service.encode()).hexdigest()[:16]
-                self.hub.connections.put_secret(credential, binding.provider.api_key)
-                definition.api_key_env = credential
-        else:
-            await public_url(definition.url)
-        # Conservatively retain approval for every non-read request, independent of generated claims.
-        definition.effect = 'read' if definition.method in ('GET', 'HEAD', 'OPTIONS') else 'write'
-        definition.idempotent = definition.effect == 'read'
-        body = export_definition(definition)
-        try:
-            prior = self.hub.development.get('api', definition.name)
-        except KeyError:
-            prior = None
-        if not prior or prior['definition'] != body:
-            self.hub.development.put('api', definition.name, body, prior['revision'] if prior else 0)
-        self.hub.development.refresh_api(definition.name)
+        await bind_api_definition(self.hub, api.definition, api.service, namespace)
 
     def save_skill(self, args, namespace, code, reports):
         """Persist procedures only with actual executable evidence, separate from the node implementation."""
