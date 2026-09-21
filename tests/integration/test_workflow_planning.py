@@ -242,6 +242,10 @@ async def test_reused_workflow_repair_preserves_writes_and_explicit_pin(hub, int
             if request.response_schema['title'] == 'DispatchDecision':
                 return ModelResult(data={'action': 'use', 'candidate': 'reusable@1', 'confidence': 1,
                                          'inputs': {}, 'message': 'Use existing task'})
+            if request.response_schema['title'] == 'BuildEdits':
+                # Deliberately refuse to fix a changed write/input. Stagnation
+                # detection must stop recovery without publishing it.
+                return ModelResult(data={'edits': [], 'done': True})
             assert request.response_schema['title'] == 'BuildDraft'
             content = json.loads(request.messages[-1]['content'])
             builds.append(content)
@@ -264,6 +268,8 @@ async def test_reused_workflow_repair_preserves_writes_and_explicit_pin(hub, int
         assert not builds and result['turns'][0]['status'] == 'failed'
     elif repair_change != 'valid':
         assert len(builds) == 1 and result['turns'][0]['status'] == 'failed'
+        if repair_change in ('write', 'inputs'):
+            assert len(hub.development.workflows()) == 1
     else:
         assert len(builds) == 1 and result['turns'][0]['status'] == 'succeeded', result['turns']
         run = hub.store.run(result['turns'][0]['task']['run_id'])
@@ -271,3 +277,70 @@ async def test_reused_workflow_repair_preserves_writes_and_explicit_pin(hub, int
         assert run['steps'][0]['spec']['kind'] == 'transform'
         assert run['steps'][0]['output'] == {'receipt': 'done'}
         assert run['steps'][-1]['output'] == {'text': 'fixed'}
+
+
+@pytest.mark.parametrize('proposal_error', ['removed_write', 'changed_write', 'changed_inputs'])
+async def test_repair_receipt_errors_reach_compiler_before_publication(hub, proposal_error):
+    """Local protocol fixture: repair a rejected proposal without repeating a real write."""
+    import copy
+    writes, corrections = [], []
+
+    async def write(args, ctx):
+        writes.append(args)
+        return {'receipt': 'once'}
+
+    async def checked(args, ctx):
+        return args
+
+    hub.tools.register(ToolSpec(name='test.once', effect='write', idempotent=False), write)
+    hub.tools.register(ToolSpec(name='test.checked', input_schema={
+        'type': 'object', 'properties': {'value': {'type': 'string', 'minLength': 1}},
+        'required': ['value']}), checked)
+    hub.development.save_workflow('receipt-task', {
+        'name': 'receipt task', 'inputs': {'account': 'original', 'initial': ''}, 'steps': [
+            {'id': 'write', 'target': 'test.once', 'input': {'account': {'$ref': '$input.account'}}},
+            {'id': 'check', 'target': 'test.checked', 'depends_on': ['write'],
+             'input': {'value': {'$ref': '$input.initial'}}}]})
+
+    class Planner:
+        async def generate(self, request, model):
+            title = request.response_schema['title']
+            content = json.loads(request.messages[-1]['content'])
+            if title == 'DispatchDecision':
+                return ModelResult(data={'action': 'use', 'candidate': 'receipt-task@1',
+                    'confidence': 1, 'inputs': {}, 'message': 'Use the saved task'})
+            if title == 'BuildDraft':
+                flow = copy.deepcopy(content['execution_feedback']['workflow'])
+                flow['steps'][1]['input'] = {'value': 'fixed'}
+                if proposal_error == 'removed_write':
+                    flow['steps'].pop(0)
+                    flow['steps'][0]['depends_on'] = []
+                elif proposal_error == 'changed_write':
+                    flow['steps'][0]['input'] = {'account': 'different'}
+                else:
+                    flow['inputs']['account'] = 'different'
+                return ModelResult(data={'workflow': flow, 'explanation': 'Repair failed input', 'questions': []})
+            assert title == 'BuildEdits'
+            corrections.append(content)
+            assert 'completed write changed' in encode(content['request']['validation_errors'])
+            assert len(hub.development.workflows()) == 1  # Invalid proposal is still private.
+            original = copy.deepcopy(content['request']['execution_feedback']['workflow'])
+            original['steps'][1]['input'] = {'value': 'fixed'}
+            return ModelResult(data={'edits': [
+                {'op': 'set', 'path': ['workflow', 'steps'], 'value': original['steps']},
+                {'op': 'set', 'path': ['workflow', 'inputs'], 'value': original['inputs']}], 'done': True})
+
+    hub.models.register('planner', Planner(), 'fixture', ['decision'])
+    conversation = await hub.conversations.create({'workspace': True, 'model': 'planner'})
+    await hub.conversations.send(conversation['id'], {'text': 'Complete the task', 'execution': 'automatic'})
+    result = await settled(hub, conversation['id'])
+    task = result['turns'][0]['task']
+    assert task['phase'] == 'completed', task
+    assert writes == [{'account': 'original'}] and len(corrections) == 1
+    continuation = hub.store.run(task['run_id'])
+    assert continuation['steps'][0]['spec']['kind'] == 'transform'
+    assert continuation['steps'][1]['output'] == {'value': 'fixed'}
+    reusable = hub.development.get('workflow', task['selected']['id'])['workflow']
+    assert reusable['steps'][0]['kind'] == 'tool'  # A future run must perform its own write.
+    fresh = await hub.wait(hub.submit(reusable, execution='automatic'))
+    assert fresh['status'] == 'succeeded' and writes == [{'account': 'original'}] * 2

@@ -628,6 +628,7 @@ Respond in the user's language. title is only used if creating a new workflow. F
         identifier = "chat-" + turn["id"] + "-repair-" + str(attempt)
         assistant = state["assistant"]
         feedback = {
+            "run_id": run["id"],
             "workflow": run["spec"],
             "steps": [{k: step.get(k) for k in ("id", "status", "error", "output")} for step in run["steps"]],
             "attempt": attempt,
@@ -916,6 +917,9 @@ Respond in the user's language. title is only used if creating a new workflow. F
         plan = build_status(self.hub, state["assistant_id"], state["assistant"])
         if plan["status"] == "waiting_connections":
             return self.wait_connections(conversation, turn, state, plan, Phase.BUILDING)
+        if plan["status"] == "invalid":
+            state["phase"] = Phase.FAILED
+            return self.finish(turn, state, "failed", "流程验证未通过：" + "\n".join(plan["errors"]))
         if plan["status"] != "ready":
             state["phase"] = Phase.CLARIFICATION
             return self.finish(

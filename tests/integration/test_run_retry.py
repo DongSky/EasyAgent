@@ -505,7 +505,8 @@ async def test_retried_build_graph_animates_without_replacing_nodes(api, monkeyp
             await browser.close()
 
 
-async def test_legacy_invalid_build_can_retry_from_chat_and_execute(api):
+@pytest.mark.parametrize('legacy_status', [False, True])
+async def test_legacy_invalid_build_can_retry_from_chat_and_execute(api, legacy_status):
     from playwright.async_api import async_playwright, expect
     from easyagent.contracts import ModelResult
     from easyagent.store import encode
@@ -542,7 +543,16 @@ async def test_legacy_invalid_build_can_retry_from_chat_and_execute(api):
     await hub.conversations.send(c['id'], {'text': '创建保存输入的流程', 'intent': 'create'})
     c = await settled(hub, c['id'])
     turn = c['turns'][-1]
-    assert turn['status'] == 'succeeded' and turn['task']['phase'] == 'clarification'
+    assert turn['status'] == 'failed' and turn['task']['phase'] == 'failed'
+    if legacy_status:
+        # Older builds incorrectly reported validation failures as a successful
+        # clarification. Those persisted conversations must remain retryable.
+        with hub.store.transaction() as db:
+            state = json.loads(db.execute('SELECT state FROM conversation_jobs WHERE turn_id=?',
+                                          (turn['id'],)).fetchone()[0])
+            state['phase'] = 'clarification'
+            db.execute('UPDATE conversation_jobs SET state=? WHERE turn_id=?', (encode(state), turn['id']))
+            db.execute("UPDATE conversation_turns SET status='succeeded' WHERE id=?", (turn['id'],))
     run_id = turn['run_id']
     hub.tools.entries['development.verify_build'] = (spec, current_verify)
     async with async_playwright() as playwright:

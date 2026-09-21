@@ -290,6 +290,7 @@ multi-stage requests must expose their actual stages. Include a final useful res
             "knowledge": namespace_list,
             "model": model,
             "code_revision": code_revision,
+            "repair_from": (context.get("execution_feedback") or {}).get("run_id"),
         },
         "assistant-builder",
     )
@@ -326,7 +327,13 @@ def validate_compiled(hub, workflow, build):
                 visit(Workflow.model_validate(step.body))
 
     # Inspect referenced children as well; a saved graph must not conceal new privileges.
-    visit(hub.prepare(workflow))
+    prepared = hub.prepare(workflow)
+    visit(prepared)
+    if build.get("repair_from"):
+        # Check receipts while the draft can still receive validation feedback.
+        # Discard the transformed continuation: the reusable plan must retain its
+        # real operations, and bind() substitutes receipts only for this repair.
+        hub.goals.reuse_writes(prepared, hub.store.run(build["repair_from"]))
 
 
 def build_status(hub, identifier, assistant):

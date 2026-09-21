@@ -60,6 +60,7 @@ The [latest development and acceptance record](NEXT_DELIVERY.md) tracks current 
 - Design references: [open-source projects](OPEN_SOURCE_REVIEW.md) and [models and research approaches](MODELS_AND_RESEARCH.md).
 - Project comparisons: [early Pi/Hermes comparison](PI_HERMES_GAP_BASELINE.md) and [later gap review](PI_HERMES_GAP_ANALYSIS.md).
 - Integration tests: [historical records](VALIDATION.md), [construction methods](CONSTRUCTION_ACCEPTANCE.md), and [task scenarios](TEST_SCENARIOS.md).
+- [Source organization and functional acceptance (Chinese)](CODE_READABILITY.md).
 - Focused checks: [extensions](EXTENSION_ACCEPTANCE.md), [live workflows](LIVE_WORKFLOW_ACCEPTANCE.md), and [images and video](MEDIA_ACCEPTANCE.md).
 
 ## Maintaining the docs
