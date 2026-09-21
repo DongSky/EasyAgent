@@ -120,3 +120,47 @@ async def test_dynamic_delegation_single_worker_and_capability_denial(hub):
     # The parent learns about the refusal instead of crashing; no child is created.
     assert denied["status"] == "succeeded" and "grant" in denied["steps"][0]["output"]["text"]
     assert denied["usage"]["child_runs"] == 0 and not denied["children"]
+
+
+async def test_subagent_result_is_bounded_and_carries_a_hash(hub):
+    """The parent reads a child's answer, never its transcript, and never an unbounded one."""
+    class LongChild:
+        async def generate(self, request, model):
+            if model == "child":
+                return ModelResult(text="y" * 40000, usage={"mock": True})
+            observations = [json.loads(m["content"]) for m in request.messages if m["role"] == "tool"]
+            if observations and isinstance(observations[-1].get("error"), dict):
+                return ModelResult(text="refused", usage={"mock": True})
+            if not observations:
+                return ModelResult(
+                    tool_calls=[ToolCall(id="spawn", name="agents.spawn",
+                                         arguments={"goal": "answer at length", "model": "child", "tools": []})],
+                    usage={"mock": True},
+                )
+            if len(observations) == 1:
+                return ModelResult(
+                    tool_calls=[ToolCall(id="wait", name="agents.wait", arguments={"id": observations[0]["id"]})],
+                    usage={"mock": True},
+                )
+            result = observations[-1]
+            text = result["output"]["text"]
+            return ModelResult(text=json.dumps({
+                "length": len(text), "truncated": "[truncated" in text,
+                "hashed": bool(result.get("result_hash")),
+                "status": result["status"],
+            }), usage={"mock": True})
+
+    hub.models.register("parent", LongChild(), "parent", ["chat"])
+    hub.models.register("child", LongChild(), "child", ["chat"])
+    flow = {
+        "name": "long delegate",
+        "steps": [{"id": "agent", "kind": "agent", "target": "parent", "input": {
+            "prompt": "delegate", "tools": ["agents.spawn", "agents.wait"],
+            "delegation": {"models": ["child"], "tools": []}}}],
+    }
+    run = await hub.wait(hub.submit(flow), timeout=15)
+    assert run["status"] == "succeeded", run
+    payload = json.loads(run["steps"][0]["output"]["text"])
+    assert payload["status"] == "succeeded"
+    assert payload["truncated"] and payload["hashed"]
+    assert payload["length"] < 40000

@@ -299,3 +299,33 @@ async def test_browser_shows_operator_activity_and_saved_workflow(api):
             assert not errors, errors
         finally:
             await browser.close()
+
+
+async def test_prompt_orders_stable_material_before_volatile(hub):
+    """A changing tail must not invalidate the cached prefix of the operator prompt."""
+    from easyagent.skill_packages import builtin_skills
+
+    hub.skill_packages.install({"package": builtin_skills()[0]["package"], "expected_revision": 0})
+    skill = next(s["name"] for s in hub.skills.catalog())
+
+    class Model:
+        async def generate(self, request, model):
+            return ModelResult(text="ok", usage={"mock": True})
+
+    hub.models.register("planner", Model(), "fixture", ["chat", "decision"])
+    hub.development.save_workflow(
+        "saved-one", {"name": "已保存的流程", "steps": [{"id": "e", "target": "core.echo", "input": {"text": "hi"}}]}
+    )
+
+    conversation, turn = {"id": "c1"}, {"id": "t1", "text": "做个任务"}
+    state = {"material_text": "做个任务", "attachments": []}
+    step = hub.autonomy.agent_step(conversation, turn, state, "planner")
+    instructions = step["input"]["instructions"]
+    assert "Principles:" in instructions and "Toolkit guide" in instructions
+    # The workflow catalogue changes whenever a workflow is saved, so it goes last.
+    assert instructions.index("Saved workflows") > instructions.index("Toolkit guide")
+
+    workflow = {"name": "ordered", "steps": [{"id": "a", "kind": "agent", "target": "planner", "input": {
+        "prompt": "p", "instructions": "BASE-INSTRUCTIONS", "skill_access": [skill]}}]}
+    merged = hub.prepare(workflow).steps[0].input["instructions"]
+    assert merged.index("BASE-INSTRUCTIONS") < merged.index("Available skills")

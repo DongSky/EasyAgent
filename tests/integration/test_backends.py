@@ -329,3 +329,59 @@ async def test_legacy_signed_extension_survives_restart_and_workflow_share(hub, 
     finally:
         await restarted.stop()
         await fresh.stop()
+
+
+async def test_compaction_backend_failure_falls_back_to_deletion(hub):
+    """A broken summariser must never be worse than not installing one (fail-open)."""
+    from easyagent.contracts import ModelResult, ToolCall, ToolSpec
+
+    source = """function handle(r){if(r.method.startsWith('lifecycle.'))return {result:{}};
+    if(r.method==='context')throw new Error('summariser unavailable');
+    return {result:{}};}"""
+    package = build_package(
+        {
+            "id": "ctxfail",
+            "revision": 1,
+            "title": "Failing context engine",
+            "backends": [{"kind": "context", "handler": "context", "operations": ["compact"]}],
+        },
+        {"extension.js": source},
+    )
+    await hub.extensions.install({"package": package})
+    hub.backends.select("context", {"extension": "ctxfail", "revision": 1})
+
+    async def long_result(args, ctx):
+        return {"number": args["number"], "text": "x" * 1100}
+
+    hub.tools.register(ToolSpec(name="fixture.long"), long_result)
+
+    class Model:
+        async def generate(self, request, model):
+            observed = [json.loads(m["content"])["number"] for m in request.messages if m["role"] == "tool"]
+            number = max(observed, default=0) + 1
+            if number > 5:
+                return ModelResult(text="finished without a summary")
+            return ModelResult(tool_calls=[ToolCall(id=str(number), name="fixture.long", arguments={"number": number})])
+
+    hub.models.register("planner", Model(), "fixture", {"chat"})
+    run = await hub.wait(
+        hub.submit(
+            {
+                "name": "failing summariser",
+                "steps": [
+                    {
+                        "id": "a",
+                        "kind": "agent",
+                        "target": "planner",
+                        "input": {"prompt": "Keep original request", "tools": ["fixture.long"], "context_chars": 4000},
+                    }
+                ],
+            }
+        )
+    )
+    assert run["status"] == "succeeded", run
+    kinds = {e["kind"] for e in hub.store.events(run["id"])}
+    assert "context.compaction_failed" in kinds
+    assert "context.compacted" in kinds
+    # The instruction survives even though the summariser never produced anything.
+    assert "Keep original request" in json.dumps(run["steps"][0]["state"]["messages"])

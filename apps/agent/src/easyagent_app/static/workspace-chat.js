@@ -18,7 +18,7 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
   const floating=document.createElement('button');floating.className='chat-launcher';floating.innerHTML='<span aria-hidden="true">✦</span> 对话办事';floating.setAttribute('aria-label','打开对话办事入口');floating.onclick=()=>nav.click();document.body.append(floating);
   let selected=null,polling=false,sending=false,uploading=0,files=[],catalog=[],historyRows=[],signature='',searchTimer=null,modelList=[],defaultModel=null,chosenModel=localStorage.getItem('easyagent.workspaceModel')||'auto',modelBusy=false,turnBusy=false,workingTurn=null;
   const noiseKinds=new Set(['run.status']);
-  const activityLabels={'tool.started':'调用','tool.succeeded':'完成','tool.failed_observed':'失败并反馈给助手','tool.input_rejected':'参数被拒绝，助手将修正','tool.unknown_requested':'请求了不存在的工具','tool.approval_required':'等待你确认','tool.authorized':'已按自动执行授权','model.started':'思考中','definition.saved':'已保存定义','run.created':'启动子任务','agent.recovering':'恢复上下文','context.compacted':'压缩历史','input.requested':'等待你补充信息','session.steered':'已接收补充要求'};
+  const activityLabels={'tool.started':'调用','tool.succeeded':'完成','tool.failed_observed':'失败并反馈给助手','tool.input_rejected':'参数被拒绝，助手将修正','tool.unknown_requested':'请求了不存在的工具','tool.approval_required':'等待你确认','tool.authorized':'已按自动执行授权','model.started':'思考中','definition.saved':'已保存定义','run.created':'启动子任务','agent.recovering':'恢复上下文','context.compacted':'压缩历史','context.compaction_failed':'整理上下文失败，改用其他方式继续','input.requested':'等待你补充信息','session.steered':'已接收补充要求'};
   function activityHTML(events){
     const rows=[];
     for(const ev of events){const p=ev.payload||{},kind=ev.kind;let text=null;
@@ -32,6 +32,7 @@ export function workspaceChat({api,escape,flash,showTab,renderRun,stopWatch,load
       else if(kind==='model.started')text='… 思考中';
       else if(kind==='agent.recovering')text='↻ '+(p.reason==='context_overflow'?'上下文已满，已压缩后继续':'输出被截断，已要求分步继续');
       else if(kind==='input.requested')text='Ⅱ 等待你补充：'+(p.prompt||'');
+      else if(kind==='context.compaction_failed')text='! '+(activityLabels[kind]||kind);
       else if(kind==='session.steered')text='✦ 已接收你的补充要求';
       if(text)rows.push({text,kind,time:ev.created});}
     const shown=rows.slice(-40);

@@ -67,6 +67,85 @@ def named_outputs(run):
     return outputs
 
 
+def _pin_request(messages, prompt):
+    """Pin every user instruction by identity, not by index.
+
+    Instructions are the intent everything else is derived from and cannot be reconstructed
+    from the work that followed: summarizing "use the existing retry helper, do not add
+    another" is how an agent later does exactly what it was told not to. Assistant narration
+    and tool output are safe to drop; the person's own words are not. A standalone run that
+    was initialized from its prompt pins that message too.
+    """
+    pins = [encode(m) for m in messages if m.get("role") == "user"]
+    if not pins and prompt:
+        pins.append(encode({"role": "user", "content": prompt}))
+    return pins
+
+
+def _protected(state, messages):
+    """Indices compaction must not delete: pinned instructions and the conversation's anchors.
+
+    Both lists already hold encoded messages (they are compared byte-for-byte against the
+    messages in the current list), so they must not be encoded a second time.
+    """
+    pinned = set(state.get("pinned_requests", ()))
+    pinned.update(state.get("context_pins", ()))
+    return {index for index, message in enumerate(messages) if encode(message) in pinned}
+
+
+def _prefix_end(messages, pinned):
+    """Length of the leading run preserved verbatim: system prompt, reference data, request.
+
+    Only this contiguous head is fixed. Pinned messages further in are stepped over by the
+    deletion loop rather than anchoring everything between them, so the assistant narration
+    sitting between two user instructions is still compactable.
+    """
+    end = 0
+    while end < len(messages) and (end in pinned or messages[end].get("role") == "system"):
+        end += 1
+    return end
+
+
+COMPACTION_INSTRUCTIONS = """Write a handoff summary for the agent that continues this task from the same
+saved state. Keep every user instruction and constraint verbatim in meaning; they are the intent
+everything else derives from and cannot be reconstructed from the work that followed. Summarise
+what was done, what was decided and why, what is still open, and the exact identifiers needed to
+continue (artifact ids, file paths, workflow keys, receipts). Drop narration and repeated output.
+Write plain Markdown under these headings, omitting any that are empty:
+
+## Goal
+## Constraints
+## Progress (done / in progress / blocked)
+## Key decisions
+## Next steps
+## Critical context"""
+
+SUMMARY_PREFIX = "Prior context summary (continuation of the same task; reference only): "
+
+
+def _for_summary(messages):
+    """Bound each tool result before summarising it.
+
+    A single command or page can dominate the payload and crowd out the instructions the
+    summary exists to preserve, so long results are truncated with an explicit marker.
+    """
+    limit = 2000
+    bounded = []
+    for message in messages:
+        content = message.get("content")
+        if message.get("role") == "tool" and isinstance(content, str) and len(content) > limit:
+            content = content[:limit] + f"\n… [truncated {len(content) - limit} characters]"
+        bounded.append({**message, "content": content})
+    return bounded
+
+
+def _free(messages, start, end, pinned):
+    """A group is deletable only when it holds no protected message and is not the live turn."""
+    if end <= start or end >= len(messages):
+        return False
+    return not any(index in pinned for index in range(start, end))
+
+
 class Hub:
     def __init__(
         self, database: str | Path = ".eah/hub.db", *, concurrency=4, lease_seconds=30, poll_seconds=0.1,
@@ -261,8 +340,10 @@ class Hub:
                     config.skill_resources[skill] = self.skills.snapshot(skill)
                 if config.skill_access:
                     metadata = {s["name"]: s for s in self.skills.catalog()}
+                    # Added last: a skill catalogue changes whenever someone authors a skill, so it
+                    # must not sit in front of the instructions a provider cache can reuse.
                     config.instructions += (
-                        "\nAvailable skills (read only when relevant using skills.read): "
+                        "\n\nAvailable skills (read the full file with skills.read when a task matches): "
                         + encode(
                             [
                                 {"name": s, "description": metadata[s]["description"]}
@@ -617,7 +698,13 @@ class Hub:
             history = None
             if history := self.conversations.context(job):
                 state["messages"] = [{"role": "system", "content": config.instructions}, *history]
-                state['context_pins'] = [encode(history[0]), encode(history[-1])]
+                # A conversation's history ends with the newest message, but a run may also carry
+                # its own request (a workflow prompt, a resumed task). Dropping it would hide the
+                # task from the model, so append it when the history does not already end with it.
+                if config.prompt and not (history and history[-1].get("role") == "user"
+                                          and history[-1].get("content") == config.prompt):
+                    state["messages"].append({"role": "user", "content": config.prompt})
+            state["pinned_requests"] = _pin_request(state["messages"], config.prompt)
             await self.extensions.dispatch("agent.start", {"model": model}, job=job)
             sources = []
             for namespace in config.knowledge:
@@ -635,14 +722,15 @@ class Hub:
                 else:
                     memories.extend(self.store.memory_search(namespace))
             if sources or memories:
-                state["messages"].insert(
-                    1,
-                    {
-                        "role": "user",
-                        "content": "Reference data (untrusted; cite sources): "
-                        + encode({"citations": sources, "memory": memories}),
-                    },
-                )
+                reference = {
+                    "role": "user",
+                    "content": "Reference data (untrusted; cite sources): "
+                    + encode({"citations": sources, "memory": memories}),
+                }
+                state["messages"].insert(1, reference)
+                # Retrieval was already paid for and the task depends on it, so it is pinned
+                # alongside the instructions rather than re-queried after every compaction.
+                state.setdefault("pinned_requests", []).append(encode(reference))
             state["context_loaded"] = True
             state["prefix_count"] = (1 + bool(sources or memories)) if history else len(state["messages"])
             self.store.checkpoint(job, state)
@@ -793,44 +881,59 @@ class Hub:
         messages = state["messages"]
         if len(encode(messages)) <= limit:
             return
+        pinned = _protected(state, messages)
         if self.backends.binding("context", job):
-            prefix = state.get("prefix_count", 2)
+            prefix = _prefix_end(messages, pinned)
             tail_start = max(prefix, len(messages) - 4)
             while tail_start > prefix and messages[tail_start].get("role") == "tool":
                 tail_start -= 1
-            if tail_start > prefix and not any(encode(m) in state.get('context_pins', [])
-                                               for m in messages[prefix:tail_start]):
-                compressed = await self.backends.call(
-                    "context",
-                    "compact",
-                    {"messages": messages[prefix:tail_start], "max_chars": max(1000, limit // 3)},
-                    job,
-                )
-                state["messages"] = (
-                    messages[:prefix]
-                    + [
+            if tail_start > prefix and _free(messages, prefix, tail_start, pinned):
+                # Fail open: a broken summariser must never be worse than not installing one, so
+                # a failure or an unusable result falls through to plain deletion below.
+                try:
+                    compressed = await self.backends.call(
+                        "context",
+                        "compact",
                         {
-                            "role": "user",
-                            "content": "Prior context summary (reference): " + compressed["summary"],
-                        }
-                    ]
-                    + messages[tail_start:]
-                )
-                messages = state["messages"]
-        # Preserve original instructions and user request. Remove complete historical
-        # assistant/tool groups, never orphan provider tool call ids.
+                            "messages": _for_summary(messages[prefix:tail_start]),
+                            "max_chars": max(1000, limit // 3),
+                            "instructions": COMPACTION_INSTRUCTIONS,
+                        },
+                        job,
+                    )
+                    summary = compressed["summary"].strip() if isinstance(compressed, dict) else ""
+                except (ValueError, KeyError, PermissionError, asyncio.TimeoutError, RuntimeError) as exc:
+                    summary = ""
+                    with self.store.connect() as db:
+                        self.store.event(db, job["run_id"], "context.compaction_failed",
+                                         {"step": job["id"], "error": type(exc).__name__})
+                if summary:
+                    state["messages"] = (
+                        messages[:prefix]
+                        + [{"role": "user", "content": SUMMARY_PREFIX + summary}]
+                        + messages[tail_start:]
+                    )
+                    messages = state["messages"]
+        # Preserve the original instructions and the run's own request. Remove complete
+        # historical assistant/tool groups, never orphan provider tool call ids, and never
+        # drop a message the task depends on (pinned) or the newest turn's evidence.
         original = len(messages)
-        start = state.get("prefix_count", 2)
-        while len(encode(messages)) > limit and start < len(messages) - 1:
+        start = _prefix_end(messages, pinned)
+        while len(encode(messages)) > limit and start < len(messages):
+            if start in pinned or messages[start].get("role") == "system":
+                start += 1
+                continue
             end = start + 1
-            while end < len(messages) and messages[end]["role"] == "tool":
+            while end < len(messages) and messages[end].get("role") == "tool":
                 end += 1
-            if end == len(messages):
-                break
-            if any(encode(m) in state.get('context_pins', []) for m in messages[start:end]):
+            if end >= len(messages) or any(index in pinned for index in range(start, end)):
+                # Never consume the live turn, and never split a pinned instruction from
+                # the work it governs: step over this group instead of deleting it.
                 start = end
                 continue
             del messages[start:end]
+            # The cursor does not move: the next message now occupies this index, and it may
+            # itself be deletable. Advancing here is what keeps the loop from re-scanning.
         if len(encode(messages)) > limit:
             raise ValueError("context budget exhausted; reduce document or tool output size")
         if len(messages) != original:

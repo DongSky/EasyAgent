@@ -154,6 +154,8 @@ class Autonomy:
             "- Prefer the smallest working approach: existing tools and saved workflows first, then a script, then a new node or adapter.",
             "- When the task is one the user will repeat, save it as a reusable workflow at the end (workflows.save) and say so.",
             "- Answer in the user's language. Finish with a concise summary: what was done, artifact IDs/files produced, saved workflow keys, open issues.",
+            "- Tool output belongs in files and artifacts, not in your reply. When a command or page returns a lot of text, "
+            "summarise the finding you need and keep the raw output in the workspace or an artifact.",
             "",
             "Environment: " + encode(env),
             "Connected models/services (aliases usable in workflow steps): " + encode(services),
@@ -196,12 +198,20 @@ class Autonomy:
                      "(SKILL.md frontmatter name/description, then steps and checks).")
         lines.append("- task.ask_user: pause until the user answers (blocks the task). task.request_connection: record a model/service the user must connect; "
                      "then finish with a clear explanation of what to connect and why.")
-        if catalog:
-            lines.append("")
-            lines.append("Saved workflows (key → title · description): " + encode([{"key": c["key"], "title": c["title"],
-                          "description": (c.get("description") or "")[:200], "inputs": c["input_schema"].get("properties", {})}
-                          for c in catalog]))
         instructions = "\n".join(lines)
+        # Volatile tier last: saved workflows and attachments change between runs, while the
+        # role, principles and toolkit guide above stay byte-identical. A provider that reuses
+        # the longest matching prefix then keeps the expensive part cached.
+        volatile = []
+        if attachments:
+            pass  # attachments already sit in the stable body, before the toolkit guide
+        if catalog:
+            volatile.append("Saved workflows (key → title · description · inputs): " + encode(
+                [{"key": c["key"], "title": c["title"],
+                  "description": (c.get("description") or "")[:200],
+                  "inputs": c["input_schema"].get("properties", {})} for c in catalog]))
+        if volatile:
+            instructions += "\n\n" + "\n".join(volatile)
         return instructions[:120000]
 
     # ------------------------------------------------------------------ finalize / memory / reflection
