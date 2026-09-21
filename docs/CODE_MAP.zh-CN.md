@@ -44,4 +44,4 @@ uv run pytest -q
 uv run ruff check src apps tests scripts examples
 ```
 
-真实服务验收会产生 API 费用，不能用离线夹具的成功代替它。入口和所需连接见[Agent 执行验收](AGENT_EXECUTION_REPAIR.md)。
+CI 的模型、搜索和生图回归使用本地模拟服务，不调用真实供应商 API。真实服务验收仅在本地显式运行，会产生 API 费用，不能用离线夹具的成功代替它。入口和所需连接见[Agent 执行验收](AGENT_EXECUTION_REPAIR.md)。

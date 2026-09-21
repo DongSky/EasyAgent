@@ -14,7 +14,9 @@ async def test_foreach_subworkflow_approval_and_parent_budget(hub):
     identifier = hub.submit({"name": "batch", "steps": [{"id": "batch", "kind": "foreach", "input": {"items": [1, 2, 3]}, "body": body}]})
     pending = await hub.wait(identifier)
     async with asyncio.timeout(5):
-        while len(pending["approvals"]) < 3:
+        # A parent can be checking its children while the last approval appears.
+        # Wait for both the complete approval set and the parent's waiting state.
+        while len(pending["approvals"]) < 3 or pending["status"] != "waiting_approval":
             await asyncio.sleep(0.01)
             pending = hub.store.run(identifier)
     assert pending["status"] == "waiting_approval" and len(pending["approvals"]) == 3
