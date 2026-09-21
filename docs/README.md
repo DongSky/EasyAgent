@@ -55,7 +55,7 @@
 
 - 开发计划：[原始计划](PLAN.md)、[扩展路线](EXTENSION_ROADMAP.md)、[功能检查](COMPLETENESS.md)。
 - 设计参考：[开源项目研究](OPEN_SOURCE_REVIEW.md)、[模型与研究方法](MODELS_AND_RESEARCH.md)。
-- 项目对比：[Pi/Hermes 早期对比](PI_HERMES_GAP_BASELINE.md)、[后续差距复核](PI_HERMES_GAP_ANALYSIS.md)。
+- 项目对比：[Pi/Hermes 早期对比](PI_HERMES_GAP_BASELINE.md)、[后续差距复核](PI_HERMES_GAP_ANALYSIS.md)、[Pi/Hermes/Codex/LoopX 学习与落地](COMPETITOR_LEARNINGS.md)。
 - 集成测试：[历次记录](VALIDATION.md)、[构建方式](CONSTRUCTION_ACCEPTANCE.md)、[任务样例](TEST_SCENARIOS.md)。
 - 专项验证：[扩展系统](EXTENSION_ACCEPTANCE.md)、[真实工作流](LIVE_WORKFLOW_ACCEPTANCE.md)、[图片和视频](MEDIA_ACCEPTANCE.md)。
 
