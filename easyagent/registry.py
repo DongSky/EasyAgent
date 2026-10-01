@@ -24,15 +24,18 @@ requiring a human). If P(risky) >= threshold (0.5) it raises
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -60,6 +63,7 @@ class ToolDef:
     tool_json: dict = field(default_factory=dict, repr=False)
     manifest_path: str = ""
     loaded_key: str = ""
+    builtin: bool = True  # False for programmatic/ad-hoc registrations
 
     def run(self, args: dict, ctx: dict | None = None) -> dict:
         return self.module.run(args or {}, ctx or {})
@@ -168,7 +172,37 @@ def _leakage_review(impl_source: str, fixtures: list) -> list[str]:
                 "distinctive input literal and the expected output literal "
                 "(answer appears hardcoded)"
             )
+            continue
+        # Unconditional-answer cheat: the impl returns the expected output
+        # literal without referencing any of the fixture's input literals
+        # (e.g. `return {"answer": "<expected>"}` regardless of args).
+        # The behavioral probe in promote() confirms this dynamically;
+        # here we flag the textual signal early.
+        if arg_lits and exp_lits:
+            out_hit = any(e in impl_source for e in exp_lits)
+            in_hit = any(a in impl_source for a in arg_lits)
+            if out_hit and not in_hit:
+                findings.append(
+                    f"fixture '{fx.get('name', '?')}': impl.py contains the "
+                    "expected output literal but none of the fixture's input "
+                    "literals (impl appears to ignore its input and return a "
+                    "canned answer)"
+                )
     return findings
+
+
+def _mutate_string_literals(obj: Any, literals: set[str]) -> Any:
+    """Copy a JSON-ish structure with distinctive literals perturbed."""
+    if isinstance(obj, str):
+        s = obj.strip()
+        if s in literals:
+            return obj.replace(s, s + "_probe_mutation_", 1)
+        return obj
+    if isinstance(obj, dict):
+        return {k: _mutate_string_literals(v, literals) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [ _mutate_string_literals(v, literals) for v in obj]
+    return obj
 
 
 class ToolRegistry:
@@ -247,6 +281,7 @@ class ToolRegistry:
             tool_json=tool_json,
             manifest_path=os.path.join(plugin_dir, "manifest.json"),
             loaded_key=key,
+            builtin=False,
         )
 
     def _record(self, name: str, version: str, manifest: dict, status: str,
@@ -373,6 +408,7 @@ class ToolRegistry:
         return [
             {"name": t.name, "version": t.version,
              "description": t.description, "trust": t.trust,
+             "builtin": bool(t.builtin),
              "schema": (t.tool_json or {}).get("schema") or {}}
             for t in tools
         ]
@@ -394,12 +430,18 @@ class ToolRegistry:
 
     def register_tool(self, name: str, run_fn, trust: str = "trusted",
                       description: str = "", version: str = "0.0.0",
-                      schema: dict | None = None) -> ToolDef:
-        """Programmatic registration (used for built-in tools)."""
+                      schema: dict | None = None,
+                      builtin: bool = True) -> ToolDef:
+        """Programmatic registration (used for built-in tools).
+
+        Pass ``builtin=False`` for ad-hoc/test tools so they are not treated
+        as first-class builtins by prompt trimming.
+        """
         tooldef = ToolDef(
             name=name, version=version, description=description, trust=trust,
             module=SimpleNamespace(run=run_fn), loaded_key=f"{version}@builtin",
             tool_json={"schema": schema or {}},
+            builtin=builtin,
         )
         self._register(tooldef)
         return tooldef
@@ -495,15 +537,31 @@ class ToolRegistry:
         max_failure_rate, or when it was never called and its directory is
         older than stale_days. Builtin tools are never pruned. Pruned plugins
         are moved to _archive/pruned_<name>_<stamp>/ and unregistered.
+
+        Usage counts come from the persistent ``tool_usage`` table merged
+        with this process's in-memory ledger, so a restart never resets a
+        plugin's history to zero.
         """
         now = time.time()
+        usage: dict[str, dict] = {}
+        try:
+            if self.store is not None:
+                for u in self.store.get_tool_usage():
+                    usage[u["name"]] = {"calls": int(u.get("calls") or 0),
+                                        "failures": int(u.get("failures") or 0)}
+        except Exception:
+            pass
+        with self._lock:
+            for tname, u in self._usage.items():
+                cur = usage.setdefault(tname, {"calls": 0, "failures": 0})
+                cur["calls"] = max(cur["calls"], u["calls"])
+                cur["failures"] = max(cur["failures"], u["failures"])
         pruned: list[dict] = []
         kept: list[str] = []
         for tname, tooldef in list(self._tools.items()):
             if not (tooldef.manifest_path or "").startswith(self.active_dir + os.sep):
                 continue  # builtins are never pruned
-            with self._lock:
-                u = self._usage.get(tname, {"calls": 0, "failures": 0})
+            u = usage.get(tname, {"calls": 0, "failures": 0})
             calls, fails = u["calls"], u["failures"]
             rate = (fails / calls) if calls else 0.0
             reason = None
@@ -536,6 +594,110 @@ class ToolRegistry:
             stamp = time.strftime("%Y%m%d%H%M%S")
             shutil.move(src, os.path.join(self.archive_dir, f"pruned_{name}_{stamp}"))
         self._record(name, "?", {"reason": reason}, "pruned")
+
+    # ------------------------------------------------------------------ merge
+    _MERGE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+    def _plugin_dir(self, name: str) -> str | None:
+        for base in (self.active_dir, self.inbox_dir):
+            d = os.path.join(base, name)
+            if os.path.isdir(d) and os.path.exists(os.path.join(d, "manifest.json")):
+                return d
+        return None
+
+    @staticmethod
+    def _is_shell_macro(plugin_dir: str, manifest: dict) -> bool:
+        if manifest.get("kind") == "shell":
+            return True
+        # backward compat: plugins scaffolded before the kind marker existed
+        try:
+            with open(os.path.join(plugin_dir, "impl.py"), encoding="utf-8") as f:
+                head = f.read(2000)
+        except OSError:
+            return False
+        return "_COMMANDS" in head and "Replays recorded shell commands" in head
+
+    @staticmethod
+    def _shell_commands(plugin_dir: str) -> list[str] | None:
+        """Extract the recorded command list from a shell-macro impl.py."""
+        try:
+            with open(os.path.join(plugin_dir, "impl.py"), encoding="utf-8") as f:
+                src = f.read()
+        except OSError:
+            return None
+        m = re.search(r"_COMMANDS\s*=\s*(\[.*?\])", src, re.S)
+        if not m:
+            return None
+        try:
+            cmds = ast.literal_eval(m.group(1))
+        except (SyntaxError, ValueError):
+            return None
+        return [str(c) for c in cmds if str(c).strip()] or None
+
+    def merge_plugins(self, name_a: str, name_b: str, new_name: str) -> dict:
+        """Merge two shell-macro plugins into one inbox plugin.
+
+        Only shell-macro plugins (the kind the bypass counter auto-scaffolds)
+        are mergeable: their recorded commands are concatenated and
+        deduplicated. The merged plugin lands in ``inbox/`` and must still
+        pass the full promote gates — merging never weakens admission.
+        """
+        if not self._MERGE_NAME_RE.match(new_name or ""):
+            return {"ok": False, "reason": "invalid new plugin name"}
+        if name_a == name_b:
+            return {"ok": False, "reason": "cannot merge a plugin with itself"}
+        dirs, manifests = [], []
+        for n in (name_a, name_b):
+            d = self._plugin_dir(n)
+            if d is None:
+                return {"ok": False, "reason": f"plugin '{n}' not found"}
+            manifests.append(_read_json(os.path.join(d, "manifest.json")))
+            dirs.append(d)
+        for n, d, mf in zip((name_a, name_b), dirs, manifests):
+            if not self._is_shell_macro(d, mf):
+                return {"ok": False,
+                        "reason": f"plugin '{n}' is not a shell-macro plugin; "
+                                  "only shell macros can be merged automatically"}
+        cmd_lists = [self._shell_commands(d) for d in dirs]
+        if any(cl is None for cl in cmd_lists):
+            return {"ok": False, "reason": "could not read recorded commands"}
+        seen: set[str] = set()
+        commands: list[str] = []
+        for cl in cmd_lists:
+            for c in cl:
+                if c not in seen:
+                    seen.add(c)
+                    commands.append(c)
+        if not commands:
+            return {"ok": False, "reason": "nothing to merge (no commands)"}
+        dest = os.path.join(self.inbox_dir, new_name)
+        if os.path.exists(dest):
+            return {"ok": False,
+                    "reason": f"inbox plugin '{new_name}' already exists"}
+        try:
+            from .tools import meta as _meta
+            cwd_a = ""
+            try:
+                m = re.search(r"_CWD\s*=\s*(['\"].*?['\"])",
+                              open(os.path.join(dirs[0], "impl.py"),
+                                   encoding="utf-8").read())
+                if m:
+                    cwd_a = ast.literal_eval(m.group(1))
+            except Exception:
+                pass
+            _meta.write_shell_plugin(
+                Path(dest), new_name,
+                f"Merged from {name_a} + {name_b}: "
+                f"{manifests[0].get('description', '')}".strip(),
+                commands, cwd_a)
+        except Exception as exc:
+            return {"ok": False, "reason": f"merge write failed: {exc}"}
+        self._record(new_name, "0.1.0",
+                     {"merged_from": [name_a, name_b],
+                      "commands": len(commands)}, "merged")
+        return {"ok": True, "name": new_name, "path": dest,
+                "commands": commands, "merged_from": [name_a, name_b],
+                "next": "run plugin.promote to admit it through the full gates"}
 
     # ------------------------------------------------------------------ promote
     def promote(self, name: str) -> dict:
@@ -590,18 +752,61 @@ class ToolRegistry:
                       "test case (RRSI noise-baseline rule)")
             self._record(name, version, dict(manifest), "rejected", {"reason": reason})
             return {"ok": False, "reason": reason}
+        try:
+            reruns = max(1, int(os.environ.get("EASYAGENT_DETERMINISM_RUNS", "2")))
+        except (TypeError, ValueError):
+            reruns = 2
         for fx_name, fx, result in first_results:
-            try:
-                again = module.run(fx.get("args") or {}, {})
-            except Exception as exc:
-                failures.append({"fixture": fx_name,
-                                 "error": f"re-run raised {type(exc).__name__}: {exc}"})
+            for _ in range(reruns):
+                try:
+                    again = module.run(fx.get("args") or {}, {})
+                except Exception as exc:
+                    failures.append({"fixture": fx_name,
+                                     "error": f"re-run raised {type(exc).__name__}: {exc}"})
+                    break
+                if (json.dumps(again, sort_keys=True, default=str)
+                        != json.dumps(result, sort_keys=True, default=str)):
+                    failures.append({"fixture": fx_name,
+                                     "error": "non-deterministic: re-run result differs "
+                                              "(RRSI noise-baseline rule)"})
+                    break
+        if failures:
+            self._record(name, version, dict(manifest),
+                         "rejected", {"failures": failures})
+            return {"ok": False, "failures": failures}
+
+        # --- RRSI gate 2b: input-ignoring cheat probe (behavioral). A cheat
+        # impl that never reads its input but returns the expected answer
+        # passes the textual review; mutating the input exposes it: a genuine
+        # tool's output changes, a canned answer does not.
+        try:
+            with open(os.path.join(src, "impl.py"), "r", encoding="utf-8") as f:
+                _impl_for_probe = f.read()
+        except OSError:
+            _impl_for_probe = ""
+        for fx_name, fx, result in first_results:
+            args = fx.get("args") or {}
+            arg_lits = _string_literals(args)
+            if not arg_lits:
                 continue
-            if (json.dumps(again, sort_keys=True, default=str)
-                    != json.dumps(result, sort_keys=True, default=str)):
-                failures.append({"fixture": fx_name,
-                                 "error": "non-deterministic: re-run result differs "
-                                          "(RRSI noise-baseline rule)"})
+            if any(a in _impl_for_probe for a in arg_lits):
+                continue  # impl demonstrably reads its input
+            result_blob = json.dumps(result, ensure_ascii=False, default=str)
+            if not any(e in result_blob
+                       for e in _string_literals(fx.get("expect"))):
+                continue  # didn't return the distinctive expected content
+            mutated = _mutate_string_literals(args, arg_lits)
+            try:
+                probed = module.run(mutated, {})
+            except Exception:
+                continue  # impl rejects odd input: not evidence of cheating
+            if (json.dumps(probed, sort_keys=True, default=str)
+                    == json.dumps(result, sort_keys=True, default=str)):
+                failures.append({
+                    "fixture": fx_name,
+                    "error": ("leakage review (behavioral): impl ignores its "
+                              "input yet returns the expected answer for "
+                              "mutated input (answer appears hardcoded)")})
         if failures:
             self._record(name, version, dict(manifest),
                          "rejected", {"failures": failures})
@@ -731,3 +936,8 @@ def list_tools() -> list[dict]:
 def promote(name: str) -> dict:
     """Module-level entrypoint for server.py: promote a plugin from inbox."""
     return get_default_registry().promote(name)
+
+
+def merge_plugins(name_a: str, name_b: str, new_name: str) -> dict:
+    """Module-level entrypoint: merge two shell-macro plugins into inbox."""
+    return get_default_registry().merge_plugins(name_a, name_b, new_name)

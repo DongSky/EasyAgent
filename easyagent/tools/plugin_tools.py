@@ -1,9 +1,12 @@
-"""plugin.promote — hot-update entrypoint for the agent itself.
+"""plugin.promote / plugin.merge / plugin.prune — self-improvement tooling.
 
-Runs an inbox plugin's fixtures offline; on success moves it to
-``plugins/active/`` and registers it, so the new tool is callable in the
-*next* ReAct iteration (the loop rebuilds the tool list every turn).
-Failures stay in the inbox with a rejection record.
+- ``plugin.promote``: run an inbox plugin's fixtures offline; on success move
+  it to ``plugins/active/`` and register it, so the new tool is callable in
+  the *next* ReAct iteration (the loop rebuilds the tool list every turn).
+  Failures stay in the inbox with a rejection record.
+- ``plugin.merge``: merge two shell-macro plugins into one inbox plugin
+  (commands concatenated + deduplicated); the result still needs promote.
+- ``plugin.prune``: RRSI pruning of failing/stale plugins (dry-run default).
 """
 from __future__ import annotations
 
@@ -22,6 +25,26 @@ TOOL_INFOS = [
             "type": "object",
             "properties": {"name": {"type": "string"}},
             "required": ["name"],
+        },
+    },
+    {
+        "name": "plugin.merge",
+        "description": (
+            "Merge two shell-macro plugins into one inbox plugin: recorded "
+            "commands are concatenated and deduplicated. Use when the bypass "
+            "counter (or you) created near-duplicate macros and the tool list "
+            "is getting bloated. The merged plugin still needs plugin.promote "
+            "to pass the full gates. Args: name_a, name_b, new_name."
+        ),
+        "trust": "trusted",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "name_a": {"type": "string"},
+                "name_b": {"type": "string"},
+                "new_name": {"type": "string"},
+            },
+            "required": ["name_a", "name_b", "new_name"],
         },
     },
     {
@@ -65,6 +88,20 @@ def promote(args: dict, ctx: dict | None = None) -> dict:
         return {"ok": False, "error": "plugin name required"}
     try:
         return dict(reg.promote(name))
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def merge(args: dict, ctx: dict | None = None) -> dict:
+    reg = _REGISTRY
+    if reg is None:
+        return {"ok": False, "error": "no registry bound to plugin tools"}
+    try:
+        return dict(reg.merge_plugins(
+            str(args.get("name_a", "")).strip(),
+            str(args.get("name_b", "")).strip(),
+            str(args.get("new_name", "")).strip(),
+        ))
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 

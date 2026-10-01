@@ -19,7 +19,9 @@ _HANDLERS = {
     "scaffold": meta.scaffold,
     "memory.search": memory_tools.search,
     "memory.append": memory_tools.append,
+    "memory.consolidate": memory_tools.consolidate,
     "plugin.promote": plugin_tools.promote,
+    "plugin.merge": plugin_tools.merge,
     "plugin.prune": plugin_tools.prune,
 }
 

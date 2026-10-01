@@ -12,10 +12,11 @@
 
 **锁死的（工作流保证）：**
 
-- 任务三件套：SSE 事件流 + steer（pause/resume/cancel/redirect）+ checkpoint。
+- 任务三件套：SSE 事件流 + steer（pause/resume/cancel/redirect）+ checkpoint（含断点续跑 `POST /v1/runs/{id}/resume`）。
 - 熔断三件套：max steps / 累计 cost / wall clock，到线即停。
-- 插件转正四道门：离线 fixtures 全过 → 确定性重跑（噪声基线）→ 泄漏审查（拒绝硬编码 fixture 答案的 impl）→ Jev `plugin_judge` 终裁。
-- RRSI 正则化：全量工具调用记账（`tool_usage` 表）+ `plugin.prune`（失败率≥50% 且≥5 次调用，或 30 天零调用 → 降级归档；builtin 豁免）。系统提示词明令禁止为转正而削弱门禁。
+- 插件转正四道门：离线 fixtures 全过 → 确定性重跑（噪声基线，默认复跑 2 次，`EASYAGENT_DETERMINISM_RUNS` 可调）→ 泄漏审查（文本扫描 + 行为探针：无视输入却返回预期答案的 impl 会被变异输入测试抓出来）→ Jev `plugin_judge` 终裁。
+- RRSI 正则化：全量工具调用记账（内存 + `tool_usage` 持久表，prune 读持久表所以重启不丢数）+ `plugin.prune`（失败率≥50% 且≥5 次调用，或 30 天零调用 → 降级归档；builtin 豁免）；每次 run 结束自动出 prune 候选报告（`prune_candidates` 事件），`EASYAGENT_AUTO_PRUNE=1` 才真执行。系统提示词明令禁止为转正而削弱门禁。
+- API 认证：`EASYAGENT_API_KEY` 设置后全接口走 `Authorization: Bearer`（常量时间比较）；SSE 用一次性 token（`POST /v1/sse-tokens` 换取，单次有效 60s），长效 key 永不进 URL。
 
 **自由的（Agent 自己决定）：**
 
@@ -63,22 +64,30 @@ export EASYAGENT_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free
 
 ```bash
 uvicorn easyagent.server:app
-curl -X POST localhost:8000/missions -H 'Content-Type: application/json' \
+# 设了 EASYAGENT_API_KEY 后：
+export KEY=<your-key>
+curl -X POST localhost:8000/v1/missions -H "Authorization: Bearer $KEY" \
+  -H 'Content-Type: application/json' \
   -d '{"goal": "列出 work/ 目录下的文件", "budget": {"max_steps": 20}}'
-curl -N "localhost:8000/runs/<run_id>/events"   # SSE 事件流
+# SSE：先换一次性 token（EventSource 不能设 header，长效 key 不进 URL）
+TOKEN=$(curl -s -X POST localhost:8000/v1/sse-tokens -H "Authorization: Bearer $KEY" | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')
+curl -N "localhost:8000/v1/runs/<run_id>/events?token=$TOKEN"
 ```
 
 离线冒烟（零花费、零真实 API 调用）：
 
 ```bash
-PYTHONPATH=$PWD python3 scripts/smoke_loop.py    # 骨架/门控/转正/发现
-PYTHONPATH=$PWD python3 scripts/smoke_gates.py   # 降级策略/绕路计数器/shell scaffold
+PYTHONPATH=$PWD python3 scripts/smoke_loop.py        # 骨架/门控/转正/发现
+PYTHONPATH=$PWD python3 scripts/smoke_gates.py       # 降级策略/绕路计数器/shell scaffold
+EASYAGENT_API_KEY=test-key-123 PYTHONPATH=$PWD python3 scripts/smoke_multiclient.py  # /v1+auth+SSE+webhook+裁剪+通知
+PYTHONPATH=$PWD python3 scripts/verify_audit_fixes.py  # 审计驱动的加固项（泄漏探针/续跑/prune持久化）
 ```
 
 ## 环境变量
 
 | 变量 | 用途 |
 |---|---|
+| `EASYAGENT_API_KEY` | API 认证 key；设了之后全接口要求 `Authorization: Bearer <key>`（SSE 除外，见下）。未设 = 开放模式（只适合 loopback 开发） |
 | `OPENROUTER_API_KEY` | 推理底座（OpenRouter `/chat/completions`） |
 | `EASYAGENT_MODEL` | 推理模型 id；未设置则报错（代码里不写死具体模型）。已验证：`nvidia/nemotron-3-ultra-550b-a55b:free` |
 | `JEV_ENABLED` | 默认 `1`；为 `1` 且 jev CLI 可用才用 `JevProvider` |
@@ -90,6 +99,11 @@ PYTHONPATH=$PWD python3 scripts/smoke_gates.py   # 降级策略/绕路计数器/
 | `EASYAGENT_BYPASS_THRESHOLD` | 同一目标家族绕路几次强制 scaffold，默认 `2` |
 | `EASYAGENT_MOCK_LLM` | `1` 时走 `MockClient`，离线测试 |
 | `EASYAGENT_WORKSPACE` | `file.*` 默认根目录；路径越界拒绝 |
+| `EASYAGENT_MAX_PROMPT_TOOLS` | 发给模型的工具数上限，默认 48；超了先保自愈核心（scaffold/plugin.promote/plugin.merge/plugin.prune/memory.*）再保其他 builtin，其余按调用量裁；裁掉的发 `tools_trimmed` 事件 |
+| `EASYAGENT_DETERMINISM_RUNS` | 转正噪声基线额外重跑次数，默认 2（任一次结果不同即拒绝） |
+| `EASYAGENT_AUTO_PRUNE` | `1` 时每次 run 结束真执行 prune 降级；默认只报告候选（`prune_candidates` 事件） |
+| `EASYAGENT_NOTIFY_WEBHOOK` | run 完成 webhook 地址；loopback 目标直连（不走代理），公网走环境代理；投递异步（后台线程），永不阻塞完成 |
+| `EASYAGENT_NOTIFY_ON` | 通知哪些终态，默认 `done,failed` |
 
 硬约束：密钥绝不写进任何文件、绝不打进日志；只用免费模型/接口，不产生付费。
 

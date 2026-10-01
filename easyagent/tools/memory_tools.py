@@ -44,6 +44,28 @@ TOOL_INFOS = [
             "required": ["text"],
         },
     },
+    {
+        "name": "memory.consolidate",
+        "description": (
+            "Merge near-duplicate learnings into compact entries so the "
+            "memory log stays small and searchable (avoids bloat/forgetting "
+            "as learnings accumulate). Deterministic, no LLM. Backs up the "
+            "log before merging (atomic rewrite). Args: max_entries (default "
+            "200; no-op when the log is at or below this), similarity "
+            "(default 0.55), dry_run (default false; when true, report what "
+            "would merge without writing)."
+        ),
+        "trust": "trusted",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "max_entries": {"type": "integer", "default": 200, "minimum": 1},
+                "similarity": {"type": "number", "default": 0.55,
+                               "minimum": 0.0, "maximum": 1.0},
+                "dry_run": {"type": "boolean", "default": False},
+            },
+        },
+    },
 ]
 
 
@@ -86,3 +108,25 @@ def append(args: dict, ctx: dict | None = None) -> dict:
     except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     return {"ok": True, "ts": entry.get("ts")}
+
+
+def consolidate(args: dict, ctx: dict | None = None) -> dict:
+    mem = _memory_module()
+    if mem is None:
+        return {"ok": False, "error": "easyagent.memory unavailable"}
+    try:
+        max_entries = int(args.get("max_entries", 200) or 200)
+    except (TypeError, ValueError):
+        max_entries = 200
+    try:
+        similarity = float(args.get("similarity", 0.55))
+    except (TypeError, ValueError):
+        similarity = 0.55
+    try:
+        result = mem.consolidate(
+            max_entries=max(1, max_entries),
+            similarity=min(1.0, max(0.0, similarity)),
+            dry_run=bool(args.get("dry_run", False)))
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    return {"ok": True, **result}

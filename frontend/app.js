@@ -22,6 +22,46 @@ function flash(text) {
   flash._t = setTimeout(() => (el.style.display = 'none'), 5000);
 }
 
+// ---------------- auth + api ----------------
+// 服务端设置 EASYAGENT_API_KEY 后，所有 /v1 接口需要 Bearer 认证。
+// key 只存本机 localStorage；SSE 用一次性 token（POST /v1/sse-tokens 换取），
+// 长效 key 永不出现在 URL 里（EventSource 不能设 header 才用这招）。
+const getKey = () => localStorage.getItem('easyagent_key') || '';
+function api(path, opts = {}) {
+  const headers = { ...(opts.headers || {}) };
+  const k = getKey();
+  if (k) headers['Authorization'] = 'Bearer ' + k;
+  return fetch('/v1' + path, { ...opts, headers });
+}
+async function sseUrl(path) {
+  const k = getKey();
+  let tokenParam = '';
+  if (k) {
+    // 用 Bearer 换一次性 SSE token；失败则降级为无 token（开发开放模式可用）
+    try {
+      const r = await api('/sse-tokens', { method: 'POST' });
+      if (r.ok) {
+        const j = await r.json();
+        if (j.token) tokenParam = 'token=' + encodeURIComponent(j.token);
+      }
+    } catch { /* 忽略，走开放模式 */ }
+  }
+  const parts = [];
+  const qm = path.indexOf('?');
+  let base = path, qs = '';
+  if (qm >= 0) { base = path.slice(0, qm); qs = path.slice(qm + 1); }
+  if (qs) parts.push(qs);
+  if (tokenParam) parts.push(tokenParam);
+  return '/v1' + base + (parts.length ? '?' + parts.join('&') : '');
+}
+$('apiKey').value = getKey();
+$('apiKey').addEventListener('change', (e) => {
+  const v = e.target.value.trim();
+  if (v) localStorage.setItem('easyagent_key', v);
+  else localStorage.removeItem('easyagent_key');
+  flash(v ? 'API key 已保存（仅存本机浏览器）' : 'API key 已清除');
+});
+
 // ---------------- state ----------------
 let runId = null;
 let missionId = null;
@@ -50,8 +90,8 @@ $('missionForm').addEventListener('submit', async (e) => {
 
   let res;
   try {
-    // SPEC §8: POST /missions {goal, budget?} → {mission_id, run_id}
-    res = await fetch('/missions', {
+    // SPEC §8: POST /v1/missions {goal, budget?} → {mission_id, run_id}
+    res = await api('/missions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ goal, budget: b }),
@@ -119,7 +159,7 @@ function setStatus(s) {
 async function pollRunState() {
   if (!runId || terminal) return;
   try {
-    const res = await fetch(`/runs/${encodeURIComponent(runId)}`);
+    const res = await api(`/runs/${encodeURIComponent(runId)}`);
     if (!res.ok) return;
     const st = await res.json();
     if (st.status) setStatus(st.status);
@@ -130,13 +170,13 @@ async function pollRunState() {
 }
 
 // ---------------- SSE ----------------
-// SPEC §8: GET /runs/{id}/events?after_seq=N → text/event-stream
-function connectSSE() {
+// SPEC §8: GET /v1/runs/{id}/events?after_seq=N → text/event-stream
+async function connectSSE() {
   closeStream();
-  const url = `/runs/${encodeURIComponent(runId)}/events` + (lastSeq ? `?after_seq=${lastSeq}` : '');
+  const url = await sseUrl(`/runs/${encodeURIComponent(runId)}/events` + (lastSeq ? `?after_seq=${lastSeq}` : ''));
   const es = new EventSource(url);
   eventSource = es;
-  const TYPES = ['plan', 'thought', 'tool_call', 'tool_result', 'artifact', 'checkpoint', 'status', 'steer', 'done', 'error'];
+  const TYPES = ['plan', 'thought', 'tool_call', 'tool_result', 'artifact', 'checkpoint', 'status', 'steer', 'done', 'error', 'tools_trimmed', 'prune_candidates'];
   es.onmessage = (e) => handleRaw('message', e.data);
   for (const t of TYPES) es.addEventListener(t, (e) => handleRaw(t, e.data));
   es.onerror = () => {
@@ -352,13 +392,13 @@ function refreshCanvas() {
 }
 
 // ---------------- steer ----------------
-// SPEC §8: POST /runs/{id}/steer {action, message?}
+// SPEC §8: POST /v1/runs/{id}/steer {action, message?}
 async function steer(action, message) {
   if (!runId) return flash('还没有运行中的 run');
   const body = { action };
   if (message) body.message = message;
   try {
-    const res = await fetch(`/runs/${encodeURIComponent(runId)}/steer`, {
+    const res = await api(`/runs/${encodeURIComponent(runId)}/steer`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

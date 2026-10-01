@@ -134,6 +134,7 @@ class MissionRunner:
         self._threads: dict[str, threading.Thread] = {}
         self._runs: dict[str, dict] = {}  # run_id -> {"queue", "cost", "pending_redirect", "mission_id"}
         self._tool_name_map: dict[str, str] = {}  # sanitized LLM fn name -> registry name
+        self._trim_notified: set[str] = set()  # run_ids already told about tool trimming
 
     # ------------------------------------------------------------- lazy defaults
     def _default_decisions(self) -> Any:
@@ -164,17 +165,25 @@ class MissionRunner:
         run = self.store.create_run(mission_id)
         return self.start_existing(run.run_id, mission_id)
 
-    def start_existing(self, run_id: str, mission_id: str) -> str:
-        """Attach to an already-created run (e.g. by server.py) and start it."""
+    def start_existing(self, run_id: str, mission_id: str,
+                       resume: dict | None = None) -> str:
+        """Attach to an already-created run (e.g. by server.py) and start it.
+
+        ``resume`` optionally seeds the run from a checkpoint state:
+        {"history": [...], "step": int, "cost": float}.
+        """
         self._runs[run_id] = {
             "queue": queue.Queue(),
-            "cost": 0.0,
+            "cost": float((resume or {}).get("cost") or 0.0),
             "pending_redirect": None,
             "mission_id": mission_id,
+            "run_id": run_id,
             "tool_counts": {},
             "completion_score": 0.0,
+            "resume": resume,
         }
-        self._emit(run_id, "status", {"status": "pending", "mission_id": mission_id})
+        self._emit(run_id, "status", {"status": "pending", "mission_id": mission_id,
+                                      "resumed": bool(resume)})
         thread = threading.Thread(
             target=self._loop, args=(run_id,), name=f"mission-{run_id[:12]}",
             daemon=True,
@@ -214,17 +223,35 @@ class MissionRunner:
         except Exception:
             pass
 
-    def _tools_schema(self) -> list[dict]:
+    # Tools the model must always see even when the prompt list is trimmed:
+    # without these it cannot extend itself or stay regularized.
+    _BUILDER_TOOLS = ("scaffold", "plugin.promote", "plugin.merge",
+                      "plugin.prune", "memory.search", "memory.append",
+                      "memory.consolidate")
+
+    def _tools_schema(self, run_id: str | None = None) -> list[dict]:
         """OpenAI-compatible function tool definitions for the LLM.
 
         Providers only allow [a-zA-Z0-9_-] in function names, so dotted
         internal names (``shell.exec``) are sanitized (``shell_exec``);
         the reverse mapping is kept in ``self._tool_name_map`` for dispatch.
+
+        Anti-bloat: when the registry holds more than
+        ``EASYAGENT_MAX_PROMPT_TOOLS`` (default 48) tools, only the top
+        slice is sent — the self-improvement core first, then other
+        builtins, then the rest ranked by recorded usage. A ``tools_trimmed``
+        event tells clients (and the log) what was dropped; the agent can
+        still discover dropped plugins via memory.search recipes.
         """
+        try:
+            tools = self.registry.list_tools()
+        except Exception:
+            return []
+        tools = self._prioritize_tools(tools, run_id)
         try:
             out = []
             name_map = {}
-            for t in self.registry.list_tools():
+            for t in tools:
                 params = t.get("schema") or {"type": "object", "properties": {}}
                 fn_name = re.sub(r"[^a-zA-Z0-9_-]", "_", t["name"])
                 name_map[fn_name] = t["name"]
@@ -240,6 +267,40 @@ class MissionRunner:
             return out
         except Exception:
             return []
+
+    def _prioritize_tools(self, tools: list[dict],
+                          run_id: str | None) -> list[dict]:
+        max_tools = _env_int("EASYAGENT_MAX_PROMPT_TOOLS", 48)
+        if len(tools) <= max_tools:
+            return tools
+        usage: dict[str, int] = {}
+        try:
+            for u in self.store.get_tool_usage():
+                usage[u["name"]] = int(u.get("calls") or 0)
+        except Exception:
+            pass
+
+        def rank(t: dict) -> tuple:
+            name = t["name"]
+            # Self-improvement core first: without these the agent can neither
+            # extend itself nor stay regularized, so they survive even tiny
+            # limits. (These are builtins too, hence checked before builtin.)
+            if name in self._BUILDER_TOOLS:
+                return (0, self._BUILDER_TOOLS.index(name), name)
+            if t.get("builtin"):
+                return (1, 0, name)
+            return (2, -usage.get(name, 0), name)
+
+        ordered = sorted(tools, key=rank)
+        kept = ordered[:max_tools]
+        if run_id and run_id not in self._trim_notified:
+            self._trim_notified.add(run_id)
+            self._emit(run_id, "tools_trimmed", {
+                "total": len(tools),
+                "sent": len(kept),
+                "dropped": [t["name"] for t in ordered[max_tools:]],
+            })
+        return kept
 
     def _completion_score(self, summary: str) -> float:
         try:
@@ -323,14 +384,48 @@ class MissionRunner:
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
+    def resume_from_checkpoint(self, run_id: str) -> dict:
+        """Start a NEW run seeded from run_id's latest checkpoint
+        (history, step, cost restored). The old run is untouched."""
+        try:
+            cp = self.store.load_latest_checkpoint(run_id)
+        except Exception as exc:
+            return {"ok": False, "reason": f"checkpoint load failed: {exc}"}
+        if cp is None:
+            return {"ok": False, "reason": f"no checkpoint found for run '{run_id}'"}
+        try:
+            state = json.loads(cp.state_json)
+        except Exception as exc:
+            return {"ok": False, "reason": f"checkpoint state corrupt: {exc}"}
+        mission = self.store.get_mission(state.get("mission_id"))
+        if mission is None:
+            return {"ok": False, "reason": "checkpoint's mission no longer exists"}
+        new_run = self.store.create_run(mission.id)
+        self.start_existing(new_run.run_id, mission.id, resume={
+            "history": state.get("history") or [],
+            "step": state.get("step") or 0,
+            "cost": state.get("cost") or 0.0,
+        })
+        self._emit(new_run.run_id, "status",
+                   {"status": "resumed_from", "old_run_id": run_id,
+                    "checkpoint_step": cp.step})
+        return {"ok": True, "run_id": new_run.run_id,
+                "mission_id": mission.id, "resumed_from": run_id,
+                "checkpoint_step": cp.step}
+
     # ------------------------------------------------------------------ the loop
     def _loop(self, run_id: str) -> None:
         st = self._runs[run_id]
+        resume = st.pop("resume", None) or {}
         mission = self.store.get_mission(st["mission_id"])
         budget = mission.budget
         started = time.time()
-        history: list[dict] = []
-        step = 0
+        history: list[dict] = list(resume.get("history") or [])
+        step = int(resume.get("step") or 0)
+        if resume:
+            self._emit(run_id, "status",
+                       {"status": "resumed", "from_step": step,
+                        "history_restored": len(history)})
         self.store.update_run(run_id, status="running")
         self._emit(run_id, "status", {"status": "running", "goal": mission.goal})
         try:
@@ -353,7 +448,7 @@ class MissionRunner:
                 # ---- one ReAct iteration: observe -> decide -> act
                 messages = self._build_messages(mission, history, st)
                 try:
-                    resp = self.llm.chat(messages, tools=self._tools_schema()) or {}
+                    resp = self.llm.chat(messages, tools=self._tools_schema(run_id)) or {}
                 except Exception as exc:
                     self._emit(run_id, "error", {"error": f"llm failed: {exc}"})
                     return self._finish(run_id, st, "failed", f"LLM error: {exc}")
@@ -425,7 +520,7 @@ class MissionRunner:
 
     def _build_messages(self, mission, history: list[dict], st: dict) -> list[dict]:
         tool_names = ", ".join(
-            t["function"]["name"] for t in self._tools_schema()
+            t["function"]["name"] for t in self._tools_schema(st.get("run_id"))
         ) or "(none)"
         system = (
             "You are an autonomous agent that EXTENDS ITS OWN CAPABILITIES. "
@@ -455,8 +550,12 @@ class MissionRunner:
             "rejected; (2) noise baseline — every promotion needs >=1 "
             "fixture and deterministic re-runs; (3) cost rules — mission "
             "circuit breakers (max steps / cost / wall-clock) plus a "
-            "per-tool usage ledger; (4) pruning — plugin.prune demotes "
-            "tools that fail too often or go stale.\n"
+            "per-tool usage ledger; (4) pruning - plugin.prune demotes "
+            "tools that fail too often or go stale; (5) merging - "
+            "plugin.merge combines near-duplicate shell-macro plugins "
+            "into one inbox plugin (still gated by promote); (6) memory "
+            "hygiene - memory.consolidate merges near-duplicate "
+            "learnings so the log stays compact and searchable.\n"
             "API keys: NEVER invent or hardcode keys. If a task fundamentally "
             "needs an external API key you do not have, finish with the final "
             "summary exactly: NEED_KEY: <service> - <what the key is for>. "
@@ -514,6 +613,36 @@ class MissionRunner:
         self._emit(run_id, "status", {"status": status})
         self._emit(run_id, "done", {"status": status,
                                     "summary": str(summary)[:2000]})
+        # RRSI pruning checkpoint: every finished run re-evaluates the plugin
+        # population. A dry-run report is always emitted when candidates
+        # exist; real demotion only with EASYAGENT_AUTO_PRUNE=1 (best-effort).
+        try:
+            if self.registry is not None and hasattr(self.registry, "prune"):
+                auto = os.environ.get("EASYAGENT_AUTO_PRUNE", "").strip() == "1"
+                report = self.registry.prune(dry_run=not auto)
+                cands = report.get("pruned") or []
+                if cands:
+                    self._emit(run_id, "prune_candidates",
+                               {"dry_run": report.get("dry_run", True),
+                                "candidates": cands,
+                                "hint": "run plugin.prune with dry_run=false "
+                                        "to demote, or set EASYAGENT_AUTO_PRUNE=1"})
+        except Exception:
+            pass
+        # Best-effort push notification (mobile clients whose SSE died in
+        # the background). Never raises; see easyagent/notify.py.
+        try:
+            from . import notify as _notify
+            goal = ""
+            try:
+                mission = self.store.get_mission(st.get("mission_id") or "")
+                goal = getattr(mission, "goal", "") or ""
+            except Exception:
+                pass
+            _notify.notify_run_finished_async(run_id, status, goal=goal,
+                                                summary=str(summary or ""))
+        except Exception:
+            pass
 
     # --------------------------------------------- bypass counter (RRSI glue)
     _PRIMITIVE_TOOLS = ("shell.exec", "file.write", "file.edit")
@@ -656,3 +785,9 @@ def start_background(run_id: str, mission_id: str) -> str:
 def queue_command(run_id: str, command: Any) -> bool:
     """Entrypoint for server.py: steer a running run."""
     return get_default_runner().queue_command(run_id, command)
+
+
+def resume_from_checkpoint(run_id: str) -> dict:
+    """Entrypoint for server.py: start a NEW run seeded from run_id's latest
+    checkpoint (history, step, cost restored). The old run is untouched."""
+    return get_default_runner().resume_from_checkpoint(run_id)

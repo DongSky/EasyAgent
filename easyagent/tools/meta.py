@@ -410,6 +410,50 @@ def run(args: dict, ctx: dict) -> dict:
 '''
 
 
+def write_shell_plugin(dest: Path, name: str, description: str,
+                      commands: list[str], cwd: str = "") -> None:
+    """Write a shell-macro plugin directory (shared by scaffold and merge)."""
+    dest.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "api_version": "1",
+        "name": name,
+        "version": "0.1.0",
+        "description": description,
+        "trust": "untrusted",
+        "timeout_seconds": 120,
+        "max_output_bytes": 1_000_000,
+        "kind": "shell",
+    }
+    tool = {
+        "name": name,
+        "description": description,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "args": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "extra argv appended to the final command",
+                },
+            },
+        },
+    }
+    impl = _SHELL_IMPL_TEMPLATE.format(name=name, commands=commands, cwd=cwd)
+    fixtures = [
+        {
+            "name": "smoke",
+            "args": {},
+            "expect": {"ok": True},
+        }
+    ]
+    (dest / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    (dest / "tool.json").write_text(
+        json.dumps(tool, indent=2, ensure_ascii=False), encoding="utf-8")
+    (dest / "impl.py").write_text(impl, encoding="utf-8")
+    (dest / "fixtures.json").write_text(
+        json.dumps(fixtures, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
 def _scaffold_shell(name: str, description: str, recipe: dict) -> dict:
     """Scaffold a plugin that replays recorded shell commands (macro plugin).
 
@@ -430,45 +474,7 @@ def _scaffold_shell(name: str, description: str, recipe: dict) -> dict:
     cwd = str(recipe.get("cwd") or "")
     dest = plugins_root() / "inbox" / name
     try:
-        dest.mkdir(parents=True, exist_ok=True)
-        manifest = {
-            "api_version": "1",
-            "name": name,
-            "version": "0.1.0",
-            "description": description,
-            "trust": "untrusted",
-            "timeout_seconds": 120,
-            "max_output_bytes": 1_000_000,
-        }
-        tool = {
-            "name": name,
-            "description": description,
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "args": {
-                        "type": "array", "items": {"type": "string"},
-                        "description": "extra argv appended to the final command",
-                    },
-                },
-            },
-        }
-        impl = _SHELL_IMPL_TEMPLATE.format(
-            name=name, commands=commands, cwd=cwd)
-        fixtures = [
-            {
-                "name": "smoke",
-                "args": {},
-                "expect": {"ok": True},
-            }
-        ]
-        (dest / "manifest.json").write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
-        (dest / "tool.json").write_text(
-            json.dumps(tool, indent=2, ensure_ascii=False), encoding="utf-8")
-        (dest / "impl.py").write_text(impl, encoding="utf-8")
-        (dest / "fixtures.json").write_text(
-            json.dumps(fixtures, indent=2, ensure_ascii=False), encoding="utf-8")
+        write_shell_plugin(dest, name, description, commands, cwd)
     except OSError as exc:
         return {"ok": False, "error": f"scaffold write failed: {exc}"}
     return {"ok": True, "path": str(dest),

@@ -24,7 +24,10 @@
 3. 探索子任务（有界：≤10 步、≤300s、禁止付费调用）：`fetch_docs` 拉文档 → `probe` 沙盒试调 → `scaffold` 写 `plugins/inbox/<name>/` 四件套 → `promote`。
 4. 失败 → 返回 `None`，并 `append_learning("explored <need>: failed because ...")` 把教训记下来。
 
-决策"要不要探索"本身走 Jev 门控 2（`gap_triage`，见下）。
+决策"要不要探索"分两条路（见门控表）：agent 自己决定调用 `scaffold`
+是它的自主探索（写 inbox，不直接可调；转正仍走门控 4 的全套 RRSI 检查），
+这是架构要保留的自由度；只有**系统替 agent 做决定**的 bypass 强制路径
+（`_force_scaffold` → `ensure_capability`）才走 Jev 门控 2（`gap_triage`）。
 
 ### 2. 注册表（`registry.py`）——插件的生命周期管理
 
@@ -51,7 +54,15 @@
   （`{"kind": "shell", "commands": [...]}`）调 `ensure_capability` 自动 scaffold 出 macro 插件，
   仍过全部转正门（含 `EASYAGENT_GATE_POLICY`）。`EASYAGENT_BYPASS_AUTO=0` 关闭。
 
-`server.py` 是薄 HTTP 层：missions API + SSE 事件推送（`GET /runs/{id}/events?after_seq=N`），`/` 挂载 `frontend/` 静态文件。前端不跑 agent 逻辑、不持有状态机。接口细节见 `API.md`。lifespan 退出时调 `registry.stop_watch()` 停掉热重载 watcher。
+`server.py` 是薄 HTTP 层：missions API + SSE 事件推送（`GET /v1/runs/{id}/events?after_seq=N`），`/` 挂载 `frontend/` 静态文件。前端不跑 agent 逻辑、不持有状态机。接口细节见 `API.md`。lifespan 退出时调 `registry.stop_watch()` 停掉热重载 watcher。
+
+**认证设计**（`server.py`）：`EASYAGENT_API_KEY` 设置后，全路由显式绑定认证依赖（SSE 路由用 `require_key_sse`）：通用 API 只认 `Authorization: Bearer`（常量时间比较，`?key=` 后门已删）；浏览器 EventSource 拿不到 header，走一次性 token（`POST /v1/sse-tokens` 用 Bearer 换取，60s 过期、单次使用），前端 `connectSSE()` 自动换 token、断线重连时重新换，长效 key 永不出现在 URL 里。
+
+**checkpoint 续跑**：`load_latest_checkpoint()` 不再是死代码——`MissionRunner.resume_from_checkpoint(run_id)` / `POST /v1/runs/{id}/resume` 从最新 checkpoint 恢复 `history`/`step`/`cost`/`mission_id`，开新 run 继续（旧 run 不篡改，发 `resumed`/`resumed_from` 事件）。checkpoint 存档时也写入 store（事件可回放）。
+
+**完成通知**：`EASYAGENT_NOTIFY_WEBHOOK` 设置后，`_finish()` 走 `notify_run_finished_async`（daemon 线程），DNS/TLS/重试永不阻塞任务完成；loopback 目标直连（不走环境代理），公网保留代理行为。
+
+**prompt 工具裁剪**（`EASYAGENT_MAX_PROMPT_TOOLS`，默认 48）：超限时按自愈核心（scaffold/plugin.promote/plugin.merge/plugin.prune/memory.*）→ 其他 builtin → 按调用量排序裁，裁掉的发 `tools_trimmed` 事件；每次 `_finish()` 还会出 `prune_candidates` 事件（默认 dry-run，`EASYAGENT_AUTO_PRUNE=1` 才真降级）。
 
 记忆（`memory.py`）是横切支撑：`learnings.jsonl` 追加写，CJK bigram 词法检索（不上向量），进程启动时最近 20 条注入 llm system prompt。
 
@@ -84,7 +95,7 @@ SPEC §13 明令删除、不得复活：
 | # | 门控 | kind | 语义 |
 |---|---|---|---|
 | 1 | `risk_gate(tool_name, args) -> bool` | noul | "这个工具调用有风险吗"，P(risky) ≥ 0.5 → 需人工确认 |
-| 2 | `gap_triage(need) -> explore\|skip\|ask` | choice | 能力缺口分诊：探索 / 跳过 / 问人 |
+| 2 | `gap_triage(need) -> explore\|skip\|ask` | choice | 能力缺口分诊：探索 / 跳过 / 问人。只约束**系统强制**的探索（bypass 计数器触发的 `ensure_capability`）；agent 自己调用 `scaffold` 是自主探索，不走此门控（scaffold 只写 inbox，转正仍受门控 4 约束） |
 | 3 | `completion_score(summary) -> 0..5` | score | mission 完成度打分，<3 且步数有余则继续迭代 |
 | 4 | `plugin_judge(name, fixture_report) -> bool` | noul | "该插件是否达到转正标准" |
 

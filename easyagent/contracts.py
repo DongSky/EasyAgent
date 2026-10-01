@@ -23,6 +23,8 @@ RunEventType = Literal[
     "steer",
     "done",
     "error",
+    "tools_trimmed",
+    "prune_candidates",
 ]
 Trust = Literal["trusted", "untrusted"]
 DecisionKind = Literal["noul", "choice", "score"]

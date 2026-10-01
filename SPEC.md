@@ -143,11 +143,35 @@
 
 ## 8. Server（server.py，FastAPI）
 
-- `POST /missions {goal, budget?}` → `{mission_id, run_id}`（run_id 后台启动）
-- `GET /runs/{id}` → RunState；`GET /runs/{id}/events?after_seq=N` → SSE `text/event-stream`
-- `POST /runs/{id}/steer {action, message?}` → ok
-- `GET /tools` → registry 列表；`POST /tools/promote {name}` → promote 结果
+- `POST /v1/missions {goal, budget?}` → `{mission_id, run_id}`（run_id 后台启动）
+- `GET /v1/runs/{id}` → RunState；`GET /v1/runs/{id}/events?after_seq=N` → SSE `text/event-stream`
+- `POST /v1/runs/{id}/steer {action, message?}` → ok
+- `POST /v1/runs/{id}/resume` → `{run_id, resumed_from}`：从最新 checkpoint 开新 run 续跑（无 checkpoint/损坏/mission 丢失 → 干净失败）
+- `POST /v1/sse-tokens` → `{"token"}`：一次性 SSE token（60s 过期、单次使用）；SSE 支持 `?token=` 或 Bearer header
+- `GET /v1/tools` → registry 列表；`POST /v1/tools/promote {name}` → promote 结果
+- 旧的不带前缀路由保留为 deprecated alias，同样需要认证
 - `/` 挂载 `frontend/` 静态文件。
+
+### 8.1 认证
+
+`EASYAGENT_API_KEY` 设置后：所有 API（含旧 alias）要求 `Authorization: Bearer <key>`，
+常量时间比较；通用 API 的 `?key=` 后门已删除；`?token=` 仅 SSE 路由接受且仅接受一次性 token
+（mint 时消费）。未设 key = 开放模式（仅适合 loopback 开发）。
+
+## 9. RRSI 正则化（registry.py / loop.py / tools）
+
+- **记账**：`call`/`call_approved` 全量记账（进程内 ledger + `store.tool_usage` 持久表）。
+- **泄漏审查**（promote 门 3）：文本扫描（impl 含预期输出字面量却不含任何 fixture 输入字面量 → 拒）+ **行为探针**（扰动 fixture 长字符串输入；若插件无视输入仍返回带预期内容的结果 → 拒）。注意：行为探针是加固手段，不是形式化证明（base64/计算式构造答案等变体仍可能存在）。
+- **噪声基线**（promote 门 2）：全部 fixture 跑通后额外重跑 `EASYAGENT_DETERMINISM_RUNS` 次（默认 2），任一次结果不同 → 拒。
+- **prune**：`prune()` 读 `tool_usage` 持久表 + 内存 ledger 合并判断（失败率≥50% 且≥5 次调用，或 30 天零调用 → 降级到 `_archive/pruned_*`；builtin 免 prune）。每次 `_finish()` 自动出 `prune_candidates` 事件（dry-run 报告）；`EASYAGENT_AUTO_PRUNE=1` 才真执行降级。
+- **合并**：`plugin.merge` 只支持 shell-macro；合并写 inbox，仍需完整 promote；返回值与写入的命令列表一致（无截断）。
+- 系统提示词点名四件套并明令禁止为转正而削弱门禁。
+
+## 10. 记忆归纳（memory.py / tools/memory_tools.py）
+
+`memory.consolidate(max_entries, similarity, dry_run)`：Jaccard 聚类去重、tags 并集、备份后重写。
+- `dry_run=true` 只报告（groups/before/after），不写文件。
+- 真执行时：备份名带 pid 防冲突（`<path>.bak.<utc>-<pid>`），临时文件 + fsync + `os.replace` 原子替换，崩溃不会留下半写日志。
 - 启动：`uvicorn easyagent.server:app`。依赖缺失时 worker 自行 `pip install fastapi uvicorn pydantic httpx`。
 
 ## 9. Tools（easyagent/tools/）
