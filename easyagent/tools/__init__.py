@@ -49,6 +49,7 @@ def register_builtins(registry) -> list[str]:
         registry.register_tool(
             tool["name"], tool["run"],
             trust=tool["trust"], description=tool["description"],
+            schema=tool.get("schema"),
         )
         names.append(tool["name"])
     return names

@@ -121,6 +121,7 @@ class ToolRegistry:
         store: Any = None,
         confirm_threshold: int = 3,
         watch_interval: float = 1.0,
+        decisions: Any = None,
     ):
         self.plugins_dir = os.path.abspath(plugins_dir)
         self.active_dir = os.path.join(self.plugins_dir, "active")
@@ -129,6 +130,9 @@ class ToolRegistry:
         self.store = store
         self.confirm_threshold = confirm_threshold
         self.watch_interval = watch_interval
+        # Optional injected decisions provider (tests / MissionRunner share
+        # one instance); falls back to decisions.make_provider() when unset.
+        self.decisions = decisions
         self._lock = threading.RLock()
         self._tools: dict[str, ToolDef] = {}
         self._versions: dict[str, list[ToolDef]] = {}  # newest first, ≤ KEEP_VERSIONS
@@ -304,7 +308,8 @@ class ToolRegistry:
             tools = list(self._tools.values())
         return [
             {"name": t.name, "version": t.version,
-             "description": t.description, "trust": t.trust}
+             "description": t.description, "trust": t.trust,
+             "schema": (t.tool_json or {}).get("schema") or {}}
             for t in tools
         ]
 
@@ -324,11 +329,13 @@ class ToolRegistry:
             return self._confirmations[name]
 
     def register_tool(self, name: str, run_fn, trust: str = "trusted",
-                      description: str = "", version: str = "0.0.0") -> ToolDef:
+                      description: str = "", version: str = "0.0.0",
+                      schema: dict | None = None) -> ToolDef:
         """Programmatic registration (used for built-in tools)."""
         tooldef = ToolDef(
             name=name, version=version, description=description, trust=trust,
             module=SimpleNamespace(run=run_fn), loaded_key=f"{version}@builtin",
+            tool_json={"schema": schema or {}},
         )
         self._register(tooldef)
         return tooldef
@@ -338,7 +345,9 @@ class ToolRegistry:
         """True = risky, needs a human. Fail-closed: any error → require human."""
         try:
             decisions = importlib.import_module("easyagent.decisions")
-            provider = decisions.make_provider()
+            provider = self.decisions
+            if provider is None:
+                provider = decisions.make_provider()
             # risk_gate is a module-level function in easyagent.decisions,
             # not a method on the provider.
             return bool(decisions.risk_gate(tool_name, args or {}, provider=provider))

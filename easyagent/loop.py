@@ -22,6 +22,7 @@ import importlib
 import json
 import os
 import queue
+import re
 import threading
 import time
 from typing import Any
@@ -101,10 +102,17 @@ class MissionRunner:
                 except Exception:
                     pass
         self.decisions = decisions or self._default_decisions()
+        # share one decisions provider with the registry's risk gate
+        try:
+            if self.registry is not None and getattr(self.registry, "decisions", None) is None:
+                self.registry.decisions = self.decisions
+        except Exception:
+            pass
         self.llm = llm or self._default_llm()
         self.checkpoint_every = max(1, checkpoint_every)
         self._threads: dict[str, threading.Thread] = {}
         self._runs: dict[str, dict] = {}  # run_id -> {"queue", "cost", "pending_redirect", "mission_id"}
+        self._tool_name_map: dict[str, str] = {}  # sanitized LLM fn name -> registry name
 
     # ------------------------------------------------------------- lazy defaults
     def _default_decisions(self) -> Any:
@@ -184,11 +192,29 @@ class MissionRunner:
             pass
 
     def _tools_schema(self) -> list[dict]:
+        """OpenAI-compatible function tool definitions for the LLM.
+
+        Providers only allow [a-zA-Z0-9_-] in function names, so dotted
+        internal names (``shell.exec``) are sanitized (``shell_exec``);
+        the reverse mapping is kept in ``self._tool_name_map`` for dispatch.
+        """
         try:
-            return [
-                {"name": t["name"], "description": t.get("description", "")}
-                for t in self.registry.list_tools()
-            ]
+            out = []
+            name_map = {}
+            for t in self.registry.list_tools():
+                params = t.get("schema") or {"type": "object", "properties": {}}
+                fn_name = re.sub(r"[^a-zA-Z0-9_-]", "_", t["name"])
+                name_map[fn_name] = t["name"]
+                out.append({
+                    "type": "function",
+                    "function": {
+                        "name": fn_name,
+                        "description": t.get("description", ""),
+                        "parameters": params,
+                    },
+                })
+            self._tool_name_map = name_map
+            return out
         except Exception:
             return []
 
@@ -329,17 +355,35 @@ class MissionRunner:
                     else:
                         return self._finish(run_id, st, "done", content)
                 else:
-                    for tc in tool_calls:
+                    # assistant message carrying all tool calls (OpenAI format:
+                    # each call needs an id, tool results reference tool_call_id)
+                    history.append({
+                        "role": "assistant", "content": content,
+                        "tool_calls": [
+                            {"id": tc.get("id") or f"call-{step}-{i}",
+                             "type": "function",
+                             "function": {
+                                 "name": tc.get("name", ""),
+                                 "arguments": json.dumps(
+                                     tc.get("args") or tc.get("arguments") or {},
+                                     ensure_ascii=False),
+                             }}
+                            for i, tc in enumerate(tool_calls)
+                        ],
+                    })
+                    for i, tc in enumerate(tool_calls):
                         tname = tc.get("name", "")
+                        # map sanitized LLM function name back to registry name
+                        tname = self._tool_name_map.get(tname, tname)
                         targs = tc.get("args") or tc.get("arguments") or {}
+                        tid = tc.get("id") or f"call-{step}-{i}"
                         self._emit(run_id, "tool_call",
                                    {"step": step, "name": tname, "args": targs})
                         result = self._call_tool(run_id, st, tname, targs)
                         self._emit(run_id, "tool_result",
                                    {"step": step, "name": tname, "result": result})
-                        history.append({"role": "assistant", "content": content,
-                                        "tool_call": {"name": tname, "args": targs}})
-                        history.append({"role": "tool", "name": tname,
+                        history.append({"role": "tool", "tool_call_id": tid,
+                                        "name": tname,
                                         "content": json.dumps(result, ensure_ascii=False,
                                                               default=str)[:8000]})
 
@@ -354,7 +398,9 @@ class MissionRunner:
             self._finish(run_id, st, "failed", str(exc))
 
     def _build_messages(self, mission, history: list[dict], st: dict) -> list[dict]:
-        tool_names = ", ".join(t["name"] for t in self._tools_schema()) or "(none)"
+        tool_names = ", ".join(
+            t["function"]["name"] for t in self._tools_schema()
+        ) or "(none)"
         system = (
             "You are an autonomous agent. Goal: " + mission.goal + "\n"
             f"Available tools: {tool_names}\n"
