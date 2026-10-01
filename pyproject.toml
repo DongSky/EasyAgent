@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "easyagent"
+version = "0.1.0"
+description = "EasyAgent rewrite: single-process + SQLite + filesystem agent framework"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "httpx",
+]
+
+[project.optional-dependencies]
+typesafe = ["typesafe-sdk"]
+
+[tool.setuptools.packages.find]
+include = ["easyagent*"]

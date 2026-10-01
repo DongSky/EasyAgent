@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EasyAgent Console</title>
+<link rel="stylesheet" href="assets/studio.css">
+<style>
+  body{max-width:1500px;margin:0 auto;padding:24px 28px;}
+  header.top{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:20px}
+  header.top h1{margin:0;font-size:24px}
+  header.top .sub{color:var(--muted);font-size:12px}
+  .card{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:20px 22px;margin-bottom:20px}
+  .card h2{margin:0 0 12px;font-size:17px}
+  .row{display:flex;gap:14px;flex-wrap:wrap}
+  .row>label{flex:1;min-width:150px;margin:0}
+  #missionForm textarea{min-height:80px}
+  #runView{display:none}
+  .statusline{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+  .badge{font-size:12px;padding:4px 12px;border-radius:20px;background:var(--soft);color:var(--accent);font-weight:700}
+  .badge.st-running{background:#e4f2ea;color:#1d6a47}
+  .badge.st-paused{background:#f6ecd2;color:#8a6d1f}
+  .badge.st-done{background:#e3e9f5;color:#33477c}
+  .badge.st-failed,.badge.st-cancelled{background:#f6dcd8;color:#a03a2c}
+  .badge.st-awaiting_confirm{background:#efe3f5;color:#6d3b8c}
+  #budgetBar{display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin:10px 0}
+  #budgetBar b{color:var(--ink);font-variant-numeric:tabular-nums}
+  .steerbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
+  .steerbar input{flex:1;min-width:220px}
+  .grid2{display:grid;grid-template-columns:1.2fr .8fr;gap:20px}
+  @media(max-width:1000px){.grid2{grid-template-columns:1fr}}
+  #eventLog{height:480px;overflow:auto;background:#101815;color:#cfe3d4;border-radius:8px;padding:14px 16px;font:12.5px/1.7 ui-monospace,monospace}
+  #eventLog .ev{margin-bottom:10px;border-bottom:1px solid #1e2c24;padding-bottom:8px}
+  #eventLog .ts{color:#7fa08d;font-size:11px;margin-right:8px}
+  #eventLog .tag{display:inline-block;font-size:10px;font-weight:700;padding:1px 8px;border-radius:10px;margin-right:8px;background:#24362d;color:#9fd6bd}
+  #eventLog .tag.tool_call{background:#3b3423;color:#e8c86a}
+  #eventLog .tag.tool_result{background:#24362d;color:#9fd6bd}
+  #eventLog .tag.artifact{background:#2b3a55;color:#a9c6ff}
+  #eventLog .tag.status{background:#40355a;color:#c9b3f5}
+  #eventLog .tag.error{background:#5a2b28;color:#f5a9a0}
+  #eventLog .tag.plan{background:#1f4d44;color:#8fe3cd}
+  #eventLog pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0 0;color:#b9cfc0;max-height:220px;overflow:auto}
+  #planList{margin:0;padding-left:20px;font-size:13px}
+  #planList li{margin:4px 0}
+  #artifactList{display:grid;gap:10px}
+  .artifact{border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-size:13px}
+  .artifact header{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px}
+  .artifact pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:200px;overflow:auto;background:var(--bg);border-radius:6px;padding:10px;font-size:12px}
+  #canvasRoot{min-height:620px}
+  #canvasRoot .canvas-viewport{height:560px}
+  #flashMsg{position:fixed;bottom:20px;right:25px;max-width:520px;padding:14px 20px;background:var(--ink);color:#fff;border-radius:8px;z-index:50;display:none}
+  .hint{font-size:12px;color:var(--muted)}
+  .runmeta{font-size:12px;color:var(--muted);font-family:ui-monospace,monospace}
+</style>
+</head>
+<body>
+<header class="top">
+  <div>
+    <h1>🤖 EasyAgent Console</h1>
+    <div class="sub">薄前端 · 任务下发 / SSE 事件流 / 画布 / steer 控制</div>
+  </div>
+  <div class="sub" id="apiBase">API: 同源</div>
+</header>
+
+<section class="card" id="missionCard">
+  <h2>下发任务</h2>
+  <form id="missionForm">
+    <label>目标 goal
+      <textarea id="goal" placeholder="例如：搜索 DuckDuckGo 上关于 ReAct agent 的最新资料，整理成一份中文摘要保存到 work/summary.md" required></textarea>
+    </label>
+    <div class="row" style="margin-top:10px">
+      <label>max_steps（最大步数）
+        <input id="maxSteps" type="number" value="50" min="1" required>
+      </label>
+      <label>max_cost_usd（最大花费，可空）
+        <input id="maxCost" type="number" step="0.01" min="0" placeholder="不限制">
+      </label>
+      <label>max_wall_clock_s（最大耗时秒）
+        <input id="maxWall" type="number" value="1800" min="1" required>
+      </label>
+    </div>
+    <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
+      <button type="submit" class="primary">提交任务 → POST /missions</button>
+      <span class="hint">提交后自动创建 run 并订阅事件流</span>
+    </div>
+  </form>
+</section>
+
+<section class="card" id="runView">
+  <h2>运行视图</h2>
+  <div class="statusline">
+    <span class="badge" id="statusBadge">—</span>
+    <span class="runmeta" id="runMeta"></span>
+  </div>
+  <div id="budgetBar">
+    <span>步数 <b id="bSteps">0</b> / <b id="bMaxSteps">—</b></span>
+    <span>花费上限 <b id="bMaxCost">—</b></span>
+    <span>耗时上限 <b id="bMaxWall">—</b> s</span>
+    <span>累计事件 <b id="bEvents">0</b></span>
+  </div>
+  <div class="steerbar">
+    <button type="button" data-steer="pause">⏸ 暂停</button>
+    <button type="button" data-steer="resume">▶ 继续 / 放行</button>
+    <button type="button" data-steer="cancel">⏹ 取消</button>
+    <input id="redirectMsg" placeholder="redirect 指令：输入新的方向说明后点发送">
+    <button type="button" id="redirectBtn">↩ 发送 redirect</button>
+  </div>
+  <div class="hint" style="margin-top:6px">steer → POST /runs/{id}/steer · awaiting_confirm 状态下「继续」视为人工放行</div>
+</section>
+
+<section class="card" id="canvasCard" style="display:none">
+  <h2>运行画布 <span class="hint">（tool_call 事件 → 新增节点，可拖动 / 缩放 / 连线）</span></h2>
+  <div id="canvasRoot"></div>
+</section>
+
+<div class="grid2" id="runGrid" style="display:none">
+  <section class="card">
+    <h2>事件流 <span class="hint">GET /runs/{id}/events · SSE</span></h2>
+    <div id="eventLog"></div>
+  </section>
+  <div>
+    <section class="card">
+      <h2>计划</h2>
+      <ol id="planList"><li class="hint">等待 plan 事件…</li></ol>
+    </section>
+    <section class="card">
+      <h2>产物</h2>
+      <div id="artifactList"><span class="hint">等待 artifact 事件…</span></div>
+    </section>
+  </div>
+</div>
+
+<div id="flashMsg"></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
