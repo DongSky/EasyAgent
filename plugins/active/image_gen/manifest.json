@@ -1,0 +1,9 @@
+{
+  "api_version": "1",
+  "name": "image_gen",
+  "version": "0.1.0",
+  "description": "Generate an image from a text prompt using pollinations.ai (free, no key required) and save to file",
+  "trust": "untrusted",
+  "timeout_seconds": 30,
+  "max_output_bytes": 1000000
+}

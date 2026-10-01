@@ -87,6 +87,62 @@ TOOL_INFOS = [
 
 # ------------------------------------------------------------ SSRF guard
 
+def _via_egress_proxy(url: str) -> bool:
+    """True when HTTP traffic is routed through an egress proxy.
+
+    In that case local DNS resolution returns the proxy's internal
+    addressing (e.g. 198.18.0.0/15), which tells us nothing about the real
+    destination — the proxy itself is the SSRF boundary. Enforcing the
+    resolved-IP check would false-positive on every external domain.
+    """
+    scheme = urlsplit(url).scheme.lower()
+    env = os.environ
+    if env.get("https_proxy") or env.get("HTTPS_PROXY"):
+        return True
+    if env.get("all_proxy") or env.get("ALL_PROXY"):
+        return True
+    if scheme == "http" and (env.get("http_proxy") or env.get("HTTP_PROXY")):
+        return True
+    return False
+
+
+def _proxy_url() -> str | None:
+    """Egress proxy URL from the environment (may carry credentials)."""
+    env = os.environ
+    return (env.get("HTTPS_PROXY") or env.get("https_proxy")
+            or env.get("ALL_PROXY") or env.get("all_proxy")
+            or env.get("HTTP_PROXY") or env.get("http_proxy"))
+
+
+def _ca_verify():
+    """TLS verify target: the egress CA bundle when present.
+
+    httpx only honours SSL_CERT_FILE with trust_env=True, but trust_env
+    must stay off (its no_proxy parser crashes on bracketed IPv6 like
+    "[::1]"). So we pass the bundle explicitly.
+    """
+    for key in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
+        path = os.environ.get(key)
+        if path and os.path.exists(path):
+            return path
+    return True
+
+
+def _make_client() -> httpx.Client:
+    """httpx client that survives this sandbox's proxy env.
+
+    httpx's no_proxy parser chokes on bracketed IPv6 entries like ``[::1]``
+    (``InvalidURL: Invalid port: ':1]'``), so we bypass trust_env entirely
+    and hand it the proxy URL explicitly. Local-only hosts are already
+    rejected by _check_public_url, so nothing needs no_proxy bypass.
+    """
+    return httpx.Client(timeout=TIMEOUT, trust_env=False,
+                        proxy=_proxy_url(), verify=_ca_verify())
+
+
+_LOCAL_NAMES = ("localhost",)
+
+
 def _check_public_url(url: str) -> str:
     """Validate *url*; return it unchanged or raise ValueError."""
     parsed = urlsplit(url)
@@ -100,6 +156,22 @@ def _check_public_url(url: str) -> str:
     # Explicit block for cloud metadata endpoints (also non-global, but be explicit).
     if host in ("169.254.169.254", "metadata.google.internal", "metadata.google"):
         raise ValueError("cloud metadata addresses are not allowed")
+    # IP literals and local names are checked without DNS, in every mode:
+    # with trust_env=False there is no no_proxy bypass, so a direct check
+    # here is the SSRF boundary for these.
+    try:
+        ip = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        ip = None
+    if ip is not None and not ip.is_global:
+        raise ValueError(f"address {ip} is not publicly routable")
+    if host in _LOCAL_NAMES or host.endswith((".localhost", ".local", ".internal")):
+        raise ValueError(f"local hostname '{host}' is not allowed")
+    if _via_egress_proxy(url):
+        # Local DNS view is the proxy's internal addressing; the proxy is
+        # the SSRF boundary for resolved names. Skip the resolved-IP check
+        # (see _via_egress_proxy).
+        return url
     try:
         infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80),
                                    type=socket.SOCK_STREAM)
@@ -108,9 +180,9 @@ def _check_public_url(url: str) -> str:
     if not infos:
         raise ValueError("hostname did not resolve")
     for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if not ip.is_global:
-            raise ValueError(f"resolved address {ip} is not publicly routable")
+        rip = ipaddress.ip_address(info[4][0])
+        if not rip.is_global:
+            raise ValueError(f"resolved address {rip} is not publicly routable")
     return url
 
 
@@ -151,10 +223,11 @@ def fetch_docs(args: dict, ctx: dict | None = None) -> dict:
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
     try:
-        with httpx.Client(timeout=TIMEOUT, follow_redirects=False) as client:
+        with _make_client() as client:
             for _ in range(4):
                 _check_public_url(url)  # re-validate every redirect hop
-                resp = client.get(url, headers={"User-Agent": USER_AGENT})
+                resp = client.get(url, headers={"User-Agent": USER_AGENT},
+                                  follow_redirects=False)
                 if resp.is_redirect:
                     url = urljoin(url, resp.headers.get("location", ""))
                     continue
@@ -201,7 +274,7 @@ def probe(args: dict, ctx: dict | None = None) -> dict:
         if k.lower() not in ("authorization", "proxy-authorization", "cookie")
     }
     try:
-        with httpx.Client(timeout=TIMEOUT) as client:
+        with _make_client() as client:
             _check_public_url(url)
             resp = client.request(
                 method, url,
@@ -243,11 +316,33 @@ def plugins_root() -> Path:
 _IMPL_TEMPLATE = '''"""Generated plugin: {name}. Implements run(args, ctx) -> dict."""
 from __future__ import annotations
 
+import os
+
 import httpx
 
 _RECIPE = {recipe!r}
 _TIMEOUT = 20.0
 _MAX_BYTES = 2 * 1024 * 1024
+
+
+def _make_client():
+    # Bypass trust_env: this sandbox's no_proxy contains bracketed IPv6
+    # entries ("[::1]") that crash httpx's parser (InvalidURL). Local-only
+    # hosts are rejected by the registry's SSRF guard before we get here.
+    # httpx only honours SSL_CERT_FILE with trust_env=True, so pass the
+    # egress CA bundle explicitly (the proxy MITMs TLS).
+    env = os.environ
+    proxy = (env.get("HTTPS_PROXY") or env.get("https_proxy")
+             or env.get("ALL_PROXY") or env.get("all_proxy")
+             or env.get("HTTP_PROXY") or env.get("http_proxy"))
+    verify = True
+    for key in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
+        path = env.get(key)
+        if path and os.path.exists(path):
+            verify = path
+            break
+    return httpx.Client(timeout=_TIMEOUT, trust_env=False,
+                        proxy=proxy, verify=verify)
 
 
 def run(args: dict, ctx: dict) -> dict:
@@ -257,7 +352,7 @@ def run(args: dict, ctx: dict) -> dict:
     headers = dict(_RECIPE.get("headers") or {{}})
     body = args.get("body", _RECIPE.get("body"))
     try:
-        with httpx.Client(timeout=_TIMEOUT) as client:
+        with _make_client() as client:
             resp = client.request(method, url, headers=headers, json=body)
             data = resp.content[:_MAX_BYTES]
             try:

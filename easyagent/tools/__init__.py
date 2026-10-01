@@ -6,7 +6,7 @@ is ``trusted``.
 """
 from __future__ import annotations
 
-from . import files, meta, search, shell
+from . import files, memory_tools, meta, plugin_tools, search, shell
 
 _HANDLERS = {
     "shell.exec": shell.run,
@@ -17,9 +17,13 @@ _HANDLERS = {
     "fetch_docs": meta.fetch_docs,
     "probe": meta.probe,
     "scaffold": meta.scaffold,
+    "memory.search": memory_tools.search,
+    "memory.append": memory_tools.append,
+    "plugin.promote": plugin_tools.promote,
 }
 
-_INFOS = [shell.TOOL_INFO, *files.TOOL_INFOS, search.TOOL_INFO, *meta.TOOL_INFOS]
+_INFOS = [shell.TOOL_INFO, *files.TOOL_INFOS, search.TOOL_INFO, *meta.TOOL_INFOS,
+          *memory_tools.TOOL_INFOS, *plugin_tools.TOOL_INFOS]
 
 
 def builtin_tools() -> list[dict]:

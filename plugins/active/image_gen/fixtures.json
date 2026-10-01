@@ -1,0 +1,12 @@
+[
+  {
+    "name": "smoke",
+    "args": {
+      "prompt": "a red apple on a table",
+      "output_path": "/tmp/easyagent-debug/fixture_apple.jpg"
+    },
+    "expect": {
+      "ok": true
+    }
+  }
+]

@@ -1,8 +1,10 @@
 """file.read / file.write / file.edit.
 
 All paths are constrained inside ``EASYAGENT_WORKSPACE``
-(default ``~/workspace/easyagent-rewrite/work``). Paths are resolved
-(symlinks included) and any escape outside the workspace is refused.
+(default ``~/workspace/easyagent-rewrite/work``) plus extra roots
+(``EASYAGENT_FILE_EXTRA_ROOTS``, default: the plugin tree, so the agent can
+iterate on scaffolded plugins). Paths are resolved (symlinks included) and
+any escape outside these roots is refused.
 """
 from __future__ import annotations
 
@@ -76,15 +78,50 @@ def workspace_root() -> Path:
     return p
 
 
+def _extra_roots() -> list[Path]:
+    """Additional writable roots (default: the plugin tree).
+
+    The agent builds capabilities by writing plugins into plugins/inbox/,
+    so file.* must be able to reach the same tree scaffold writes to.
+    Override/extend with EASYAGENT_FILE_EXTRA_ROOTS (os.pathsep-separated).
+    """
+    raw = os.environ.get("EASYAGENT_FILE_EXTRA_ROOTS")
+    if raw:
+        roots = [Path(p).expanduser() for p in raw.split(os.pathsep) if p.strip()]
+    else:
+        try:
+            from .meta import plugins_root as _plugins_root
+            roots = [_plugins_root()]
+        except Exception:
+            roots = []
+    out = []
+    for r in roots:
+        try:
+            rp = r.resolve()
+            rp.mkdir(parents=True, exist_ok=True)
+            out.append(rp)
+        except OSError:
+            continue
+    return out
+
+
 def resolve_inside(path: str) -> Path:
-    """Resolve *path* and ensure it stays inside the workspace."""
-    root = workspace_root()
-    candidate = (root / path).resolve() if not os.path.isabs(path) else Path(path).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError:
-        raise PermissionError(f"path escapes workspace: {path}")
-    return candidate
+    """Resolve *path* and ensure it stays inside the workspace or an extra root.
+
+    Absolute paths must fall under one of the roots. Relative paths resolve
+    against the workspace root (historical behaviour); use the absolute path
+    from scaffold's result when iterating on plugin files.
+    """
+    roots = (workspace_root(), *_extra_roots())
+    candidate = Path(path).resolve() if os.path.isabs(path) \
+        else (roots[0] / path).resolve()
+    for root in roots:
+        try:
+            candidate.relative_to(root)
+            return candidate
+        except ValueError:
+            continue
+    raise PermissionError(f"path escapes workspace: {path}")
 
 
 def read(args: dict, ctx: dict | None = None) -> dict:

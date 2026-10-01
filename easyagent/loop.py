@@ -108,6 +108,14 @@ class MissionRunner:
                 self.registry.decisions = self.decisions
         except Exception:
             pass
+        # bind the runner's registry to the plugin.promote tool so the agent
+        # can hot-load its own scaffolded plugins
+        try:
+            plugin_tools_mod = _lazy("easyagent.tools.plugin_tools")
+            if plugin_tools_mod is not None and hasattr(plugin_tools_mod, "set_registry"):
+                plugin_tools_mod.set_registry(self.registry)
+        except Exception:
+            pass
         self.llm = llm or self._default_llm()
         self.checkpoint_every = max(1, checkpoint_every)
         self._threads: dict[str, threading.Thread] = {}
@@ -402,11 +410,31 @@ class MissionRunner:
             t["function"]["name"] for t in self._tools_schema()
         ) or "(none)"
         system = (
-            "You are an autonomous agent. Goal: " + mission.goal + "\n"
+            "You are an autonomous agent that EXTENDS ITS OWN CAPABILITIES. "
+            "Goal: " + mission.goal + "\n"
             f"Available tools: {tool_names}\n"
             "Each turn, reply with a brief thought and either tool calls "
             "(as structured tool_calls) or a final summary with no tool calls "
-            "when the goal is achieved."
+            "when the goal is achieved.\n"
+            "Capability workflow (use it when no existing tool fits the goal):\n"
+            "1. memory.search FIRST — a past mission may have left a recipe.\n"
+            "2. Research: fetch_docs / probe for a public HTTP API, or check "
+            "what is installed locally via shell.exec.\n"
+            "3. Build: scaffold writes plugins/inbox/<name>/{manifest.json,"
+            "tool.json,impl.py,fixtures.json} and returns its absolute path. "
+            "For non-HTTP tools, write impl.py yourself with file.write using "
+            "that absolute path (it must define run(args, ctx) -> dict) plus "
+            "manifest.json/tool.json/fixtures.json, then continue at step 4.\n"
+            "4. plugin.promote <name> runs fixtures offline and HOT-LOADS the "
+            "tool — it becomes callable in your next turn. Fix and retry on "
+            "failure; never leave a broken plugin silently.\n"
+            "5. Test the new tool on the real goal, then memory.append the "
+            "working recipe so future missions remember it.\n"
+            "API keys: NEVER invent or hardcode keys. If a task fundamentally "
+            "needs an external API key you do not have, finish with the final "
+            "summary exactly: NEED_KEY: <service> - <what the key is for>. "
+            "If a key is provided via environment variable, read it from the "
+            "environment at call time; never print it or write it to disk."
         )
         messages = [{"role": "system", "content": system}]
         redirect = st.get("pending_redirect")

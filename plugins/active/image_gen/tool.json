@@ -1,0 +1,19 @@
+{
+  "name": "image_gen",
+  "description": "Generate an image from a text prompt (pollinations.ai, free, no key) and save to file.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "prompt": {
+        "type": "string"
+      },
+      "output_path": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "prompt",
+      "output_path"
+    ]
+  }
+}
