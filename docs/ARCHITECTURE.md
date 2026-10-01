@@ -1,5 +1,16 @@
 # 架构
 
+## 固定骨架 vs Agent 自由区域
+
+用工作流保证它不变坏，用 Agent 让它能变强。
+
+**锁死的（骨架，代码保证）：** mission 三件套（SSE + steer + checkpoint + 熔断三件套 max steps/cost/wall clock）；
+插件转正四道门（fixtures → 确定性重跑 → 泄漏审查 → `plugin_judge`）；RRSI 正则化（工具调用全量记账 +
+`plugin.prune` 降级；系统提示词禁止为转正削弱门禁）；`risk_gate` 永远 fail-closed。
+
+**自由的（Agent 自己决定）：** 工具组合、探索路径（装什么、查什么、impl 怎么写）、何时 `memory.append`
+留 recipe。自由不许绕开治理：见"绕路计数器"。
+
 ## 三层
 
 整个系统是单进程 + SQLite + 文件系统，按数据流向分为三层。模块名与接口名以 SPEC 为准。
@@ -33,8 +44,14 @@
 - 每步 emit `RunEvent`；每 N=5 步 `save_checkpoint`；每步检查熔断（steps / cost / wall clock），到线 → `status=done(reason=budget)` 并生成总结 artifact。
 - `steer`：`queue_command(run_id, SteerCommand)`；pause 挂起、resume 继续、cancel 终止、redirect 把 message 注入下一步 context。`awaiting_confirm` 状态下 steer `action=resume` 视为人工放行。
 - 结束时调 Jev 门控 3（`completion_score`），<3 分且步数有余 → 继续迭代；否则写总结。
+- **绕路计数器**：mission 成功结束（`completion_score` ≥ 3，非熔断）且 `shell.exec`/`file.write`/`file.edit`
+  调用 ≥ `EASYAGENT_BYPASS_PRIMITIVE_THRESHOLD`（默认 3）次、期间没调过 `scaffold`/`plugin.promote` →
+  记一次 bypass（`bypass_events` 表按目标签名计数 + learning + `bypass` 事件）。同一目标家族累计 ≥
+  `EASYAGENT_BYPASS_THRESHOLD`（默认 2）次 → 强制走发现层：用录制的 shell transcript 做 recipe
+  （`{"kind": "shell", "commands": [...]}`）调 `ensure_capability` 自动 scaffold 出 macro 插件，
+  仍过全部转正门（含 `EASYAGENT_GATE_POLICY`）。`EASYAGENT_BYPASS_AUTO=0` 关闭。
 
-`server.py` 是薄 HTTP 层：missions API + SSE 事件推送（`GET /runs/{id}/events?after_seq=N`），`/` 挂载 `frontend/` 静态文件。前端不跑 agent 逻辑、不持有状态机。接口细节见 `API.md`。
+`server.py` 是薄 HTTP 层：missions API + SSE 事件推送（`GET /runs/{id}/events?after_seq=N`），`/` 挂载 `frontend/` 静态文件。前端不跑 agent 逻辑、不持有状态机。接口细节见 `API.md`。lifespan 退出时调 `registry.stop_watch()` 停掉热重载 watcher。
 
 记忆（`memory.py`）是横切支撑：`learnings.jsonl` 追加写，CJK bigram 词法检索（不上向量），进程启动时最近 20 条注入 llm system prompt。
 
@@ -70,5 +87,18 @@ SPEC §13 明令删除、不得复活：
 | 2 | `gap_triage(need) -> explore\|skip\|ask` | choice | 能力缺口分诊：探索 / 跳过 / 问人 |
 | 3 | `completion_score(summary) -> 0..5` | score | mission 完成度打分，<3 且步数有余则继续迭代 |
 | 4 | `plugin_judge(name, fixture_report) -> bool` | noul | "该插件是否达到转正标准" |
+
+### 门控降级模式（`EASYAGENT_GATE_POLICY`）
+
+Jev 不可用时的降级链：**Jev → subagent judge（`FallbackProvider`，主模型 + 严格 prompt 自判）→ 策略**。
+两个 provider 都不可用时的最终策略（默认 `open`，保持历史行为）：
+
+| 策略 | 门控 2 `gap_triage` | 门控 4 `plugin_judge` |
+|---|---|---|
+| `open`（默认） | fail-open → `explore` | fail-open → 照样转正（记录 `unavailable (fail-open)`） |
+| `ask` | → `ask`，转人工 | 不转正，记 `pending_human`，留在 inbox 等人工 |
+| `halt` | 抛 `GateHalted`，停止构建（`ensure_capability` 记 learning 后返回 `None`） | 拒绝转正，记 `halted` |
+
+门控 1 `risk_gate` 永远 fail-closed（决策异常 → 要求人工确认）；门控 3 异常 → 中性 3.0。
 
 默认模型 `jev-latest`（可配 `JEV_MODEL`，不硬编码版本号）；questions 形状 `{qid: {"type": "noul"|"choice"|"score", "instructions": ..., "criteria": ...}}`，取返回 answers 的概率 → `Decision(answer, probability, provider="jev")`。key 绝不进日志。

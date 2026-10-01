@@ -367,13 +367,125 @@ def run(args: dict, ctx: dict) -> dict:
 '''
 
 
+_SHELL_IMPL_TEMPLATE = '''"""Generated plugin: {name}. Replays recorded shell commands."""
+from __future__ import annotations
+
+import shlex
+import subprocess
+
+_COMMANDS = {commands!r}
+_CWD = {cwd!r}
+_TIMEOUT = 30.0
+_MAX_BYTES = 1_000_000
+
+
+def run(args: dict, ctx: dict) -> dict:
+    """Replay the recorded commands in order; stop on first failure.
+
+    Optional ``args.args`` (list of strings) is appended as extra argv to the
+    final command.
+    """
+    cmds = list(_COMMANDS)
+    if isinstance(args, dict):
+        extra = args.get("args")
+        if isinstance(extra, list) and extra:
+            cmds[-1] = cmds[-1] + " " + " ".join(shlex.quote(str(a)) for a in extra)
+    steps = []
+    for cmd in cmds:
+        try:
+            proc = subprocess.run(
+                shlex.split(cmd), capture_output=True, text=True,
+                timeout=_TIMEOUT, cwd=_CWD or None)
+        except Exception as exc:  # noqa: BLE001 - plugin boundary
+            return {{"ok": False, "error": f"{{type(exc).__name__}}: {{exc}}",
+                     "steps": steps}}
+        steps.append({{"command": cmd, "rc": proc.returncode,
+                       "stdout": (proc.stdout or "")[:_MAX_BYTES],
+                       "stderr": (proc.stderr or "")[:_MAX_BYTES]}})
+        if proc.returncode != 0:
+            return {{"ok": False,
+                     "error": f"command failed (rc={{proc.returncode}}): {{cmd}}",
+                     "steps": steps}}
+    return {{"ok": True, "steps": steps}}
+'''
+
+
+def _scaffold_shell(name: str, description: str, recipe: dict) -> dict:
+    """Scaffold a plugin that replays recorded shell commands (macro plugin).
+
+    Recipe: {"kind": "shell", "commands": [...], "cwd": "..."}. No shell=True
+    anywhere; commands are split with shlex and run with a timeout. The
+    plugin is untrusted and still goes through the full promote gates
+    (fixtures, determinism, leak review, judge).
+    """
+    raw = recipe.get("commands")
+    if isinstance(raw, str):
+        raw = [raw]
+    commands = [str(c).strip() for c in (raw or []) if str(c).strip()][:10]
+    if not commands:
+        return {"ok": False,
+                "error": "shell recipe needs 'commands' (non-empty list)"}
+    if any(len(c) > 2000 for c in commands):
+        return {"ok": False, "error": "shell command too long (>2000 chars)"}
+    cwd = str(recipe.get("cwd") or "")
+    dest = plugins_root() / "inbox" / name
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "api_version": "1",
+            "name": name,
+            "version": "0.1.0",
+            "description": description,
+            "trust": "untrusted",
+            "timeout_seconds": 120,
+            "max_output_bytes": 1_000_000,
+        }
+        tool = {
+            "name": name,
+            "description": description,
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "args": {
+                        "type": "array", "items": {"type": "string"},
+                        "description": "extra argv appended to the final command",
+                    },
+                },
+            },
+        }
+        impl = _SHELL_IMPL_TEMPLATE.format(
+            name=name, commands=commands, cwd=cwd)
+        fixtures = [
+            {
+                "name": "smoke",
+                "args": {},
+                "expect": {"ok": True},
+            }
+        ]
+        (dest / "manifest.json").write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+        (dest / "tool.json").write_text(
+            json.dumps(tool, indent=2, ensure_ascii=False), encoding="utf-8")
+        (dest / "impl.py").write_text(impl, encoding="utf-8")
+        (dest / "fixtures.json").write_text(
+            json.dumps(fixtures, indent=2, ensure_ascii=False), encoding="utf-8")
+    except OSError as exc:
+        return {"ok": False, "error": f"scaffold write failed: {exc}"}
+    return {"ok": True, "path": str(dest),
+            "files": ["manifest.json", "tool.json", "impl.py", "fixtures.json"]}
+
+
 def scaffold(args: dict, ctx: dict | None = None) -> dict:
     name = args.get("name", "")
     description = args.get("description", "")
     recipe = args.get("recipe") or {}
     if not _NAME_RE.match(name):
         return {"ok": False, "error": "invalid plugin name"}
-    if not isinstance(recipe, dict) or "url" not in recipe:
+    if not isinstance(recipe, dict):
+        return {"ok": False, "error": "recipe must be an object"}
+    if recipe.get("kind") == "shell":
+        return _scaffold_shell(name, description, recipe)
+    if "url" not in recipe:
         return {"ok": False, "error": "recipe must be an object with at least a url"}
     try:
         _check_public_url(recipe["url"])

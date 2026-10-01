@@ -622,13 +622,17 @@ class ToolRegistry:
             return {"ok": False, "reason": reason, "leaks": leaks}
 
         # --- Jev gate 4: plugin_judge. Fixtures + RRSI checks passed; the
-        # judge makes the final promotion call. Fail-open (recorded) so a
-        # dead judge can't brick the autonomous loop.
+        # judge makes the final promotion call.
+        # Degradation chain: Jev -> fallback subagent judge -> EASYAGENT_GATE_POLICY
+        #   open: promote anyway (recorded) so a dead judge can't brick the loop.
+        #   ask:  hold the plugin for human review (status pending_human).
+        #   halt: refuse promotion outright.
         judge_report = {"fixtures_passed": len(fixtures or []),
                         "noise_baseline": "deterministic re-runs ok",
                         "leakage_review": "clean",
                         "manifest": dict(manifest)}
         judge_ok: bool | None = None
+        decisions = None
         try:
             decisions = importlib.import_module("easyagent.decisions")
             provider = self.decisions
@@ -643,6 +647,27 @@ class ToolRegistry:
                          "rejected", {"reason": "plugin_judge declined promotion",
                                       "report": judge_report})
             return {"ok": False, "reason": "plugin_judge declined promotion"}
+        if judge_ok is None:
+            policy = "open"
+            if decisions is not None:
+                try:
+                    policy = decisions.gate_policy()
+                except Exception:
+                    pass
+            if policy == "halt":
+                self._record(name, version, dict(manifest), "halted",
+                             {"reason": "plugin_judge unavailable (policy=halt)",
+                              "report": judge_report})
+                return {"ok": False,
+                        "reason": "halted: plugin_judge unavailable"}
+            if policy == "ask":
+                self._record(name, version, dict(manifest), "pending_human",
+                             {"reason": "plugin_judge unavailable; "
+                                        "held for human review",
+                              "report": judge_report})
+                return {"ok": False,
+                        "reason": "plugin_judge unavailable; "
+                                  "held for human review (policy=ask)"}
 
         dst = os.path.join(self.active_dir, name)
         try:

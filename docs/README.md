@@ -2,7 +2,7 @@
 
 单进程 agent 运行时：SQLite 存状态、文件系统存插件，一个可中断、可 steer 的 ReAct 长循环执行任务。
 
-一句话架构：**发现层**（缺能力就地探索并孵化插件）→ **注册表**（插件热重载、转正门槛、风险门控）→ **长循环**（MissionRunner 跑 ReAct，带 checkpoint、熔断、人工 steer），推理底座是经 OpenRouter 的 Hermes 系列模型，关键决策位由 Jev（TypeSafe 原生 API）裁决。
+一句话架构：**发现层**（缺能力就地探索并孵化插件）→ **注册表**（插件热重载、转正门槛、风险门控）→ **长循环**（MissionRunner 跑 ReAct，带 checkpoint、熔断、人工 steer），推理底座是经 OpenRouter 的 Nemotron 模型（`EASYAGENT_MODEL` 可配），关键决策位由 Jev（TypeSafe System One，经 workspace skill CLI 调用）裁决。
 
 ## 5 分钟 quickstart
 
@@ -16,7 +16,7 @@ pip install -e .
 
 ```bash
 export OPENROUTER_API_KEY=...   # 推理底座
-export EASYAGENT_MODEL=...      # OpenRouter 上的 Hermes 系列模型 id
+export EASYAGENT_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free  # OpenRouter 模型 id（已验证）
 # Jev 决策位：通过 workspace skill CLI `~/workspace/skills/typesafe/bin/jev` 调用，
 # 认证走保险库 surrogate 机制（CLI 内部处理），代码不碰原始 key、不设 secret 环境变量
 ```
@@ -56,11 +56,15 @@ EASYAGENT_MOCK_LLM=1 uvicorn easyagent.server:app
 |---|---|---|
 | `OPENROUTER_API_KEY` | 推理底座 | `llm.py` 经 OpenRouter `/chat/completions` 调用，key 只从这里读 |
 | （无） | Jev 决策 | 经 skill CLI `~/workspace/skills/typesafe/bin/jev` 调用（保险库 surrogate 认证，代码零接触 key）；CLI 不可用或调用异常时 `JevProvider` 抛 `ProviderUnavailable`，调用方降级到 `FallbackProvider` |
-| `EASYAGENT_MODEL` | 模型选择 | OpenRouter 上的 Hermes 系列模型 id；未设置则报错（代码里不写死具体模型） |
-| `JEV_ENABLED` | Jev 开关 | 默认 `1`；为 `1` 且有 key 才用 `JevProvider` |
+| `EASYAGENT_MODEL` | 模型选择 | OpenRouter 模型 id；未设置则报错（代码里不写死具体模型） |
+| `JEV_ENABLED` | Jev 开关 | 默认 `1`；为 `1` 且 skill CLI 可用才用 `JevProvider`，否则走 `FallbackProvider` |
+| `EASYAGENT_GATE_POLICY` | 门控降级策略 | `open`（默认，fail-open）/ `ask`（转人工）/ `halt`（停止）；Jev 与 subagent judge 都不可用时生效 |
 | `JEV_MODEL` | Jev 模型 | 默认 `jev-latest`，不硬编码版本号 |
 | `EASYAGENT_WORKSPACE` | 工作区 | `file.*` 工具的默认根目录，默认 `~/workspace/easyagent-rewrite/work`；路径越界拒绝 |
 | `EASYAGENT_MOCK_LLM` | 离线测试 | 设为 `1` 时 `ModelClient` 走 `MockClient`，返回固定 canned ReAct 轨迹 |
+| `EASYAGENT_BYPASS_AUTO` | 绕路计数器 | 默认 `1`；`0` 关闭 |
+| `EASYAGENT_BYPASS_PRIMITIVE_THRESHOLD` | 绕路阈值 | 单次 mission 原始工具调用几次算绕路，默认 `3` |
+| `EASYAGENT_BYPASS_THRESHOLD` | 强制阈值 | 同一目标家族绕路几次强制 scaffold，默认 `2` |
 
 硬约束：密钥绝不写进任何文件、绝不打进日志；SDK/httpx 日志级别保持 info 或 off，绝不打 request body。
 

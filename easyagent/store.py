@@ -66,8 +66,17 @@ CREATE TABLE IF NOT EXISTS tool_usage (
     total_ms REAL NOT NULL DEFAULT 0,
     last_call TEXT
 );
+CREATE TABLE IF NOT EXISTS bypass_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    goal_sig TEXT NOT NULL,
+    mission_id TEXT NOT NULL,
+    primitive_calls INTEGER NOT NULL,
+    detail TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_events_run_seq ON events (run_id, seq);
 CREATE INDEX IF NOT EXISTS idx_runs_mission ON runs (mission_id);
+CREATE INDEX IF NOT EXISTS idx_bypass_sig ON bypass_events (goal_sig);
 """
 
 
@@ -290,6 +299,27 @@ class Store:
                     " ORDER BY calls DESC",
                 ).fetchall()
         return [dict(r) for r in rows]
+
+    # ---- bypass counter: missions solved with raw primitives instead of plugins
+    def record_bypass(self, goal_sig: str, mission_id: str,
+                      primitive_calls: int, detail: str = "") -> int:
+        """Record one bypass event; returns the row id."""
+        with self._lock, self._db:
+            cur = self._db.execute(
+                "INSERT INTO bypass_events (goal_sig, mission_id, primitive_calls,"
+                " detail, created_at) VALUES (?,?,?,?,?)",
+                (goal_sig, mission_id, primitive_calls, detail, _now()),
+            )
+            return cur.lastrowid
+
+    def count_bypasses(self, goal_sig: str) -> int:
+        """How many bypasses have been recorded for this goal signature."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT COUNT(*) AS c FROM bypass_events WHERE goal_sig=?",
+                (goal_sig,),
+            ).fetchone()
+        return int(row["c"]) if row else 0
 
     # ---- learnings ----
     def append_learning(self, text: str, tags: list[str] | None = None) -> int:

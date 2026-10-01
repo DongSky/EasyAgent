@@ -53,6 +53,19 @@ class _Cancelled(Exception):
     """Raised inside the run thread when a cancel steer arrives."""
 
 
+def _goal_sig(goal: str) -> str:
+    """Stable signature for a mission goal (bypass counting key)."""
+    v = re.sub(r"[^a-z0-9]+", "-", (goal or "").casefold()).strip("-")[:40]
+    return v if re.fullmatch(r"[a-z][a-z0-9-]*", v or "") else "goal"
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
 class _DefaultDecisions:
     """Neutral fallback when no decisions provider is injected/available."""
 
@@ -158,6 +171,8 @@ class MissionRunner:
             "cost": 0.0,
             "pending_redirect": None,
             "mission_id": mission_id,
+            "tool_counts": {},
+            "completion_score": 0.0,
         }
         self._emit(run_id, "status", {"status": "pending", "mission_id": mission_id})
         thread = threading.Thread(
@@ -296,6 +311,8 @@ class MissionRunner:
     def _call_tool(self, run_id: str, st: dict, name: str, args: dict) -> dict:
         from easyagent.registry import ApprovalRequired
         try:
+            counts = st.setdefault("tool_counts", {})
+            counts[name] = counts.get(name, 0) + 1
             return self.registry.call(
                 name, args, {"run_id": run_id, "mission_id": st["mission_id"]})
         except ApprovalRequired:
@@ -348,6 +365,7 @@ class MissionRunner:
                 if not tool_calls:
                     # ---- finish path, gated by completion_score
                     score = self._completion_score(content)
+                    st["completion_score"] = score
                     self._emit(run_id, "status",
                                {"completion_score": score, "step": step})
                     wall_left = (time.time() - started) < budget.max_wall_clock_s
@@ -492,9 +510,125 @@ class MissionRunner:
         if summary:
             self._emit(run_id, "artifact",
                        {"kind": "summary", "content": str(summary)[:4000]})
+        self._check_bypass(run_id, st, status, summary)
         self._emit(run_id, "status", {"status": status})
         self._emit(run_id, "done", {"status": status,
                                     "summary": str(summary)[:2000]})
+
+    # --------------------------------------------- bypass counter (RRSI glue)
+    _PRIMITIVE_TOOLS = ("shell.exec", "file.write", "file.edit")
+    _BUILDER_TOOLS = ("scaffold", "plugin.promote")
+
+    def _check_bypass(self, run_id: str, st: dict, status: str,
+                      summary: str) -> None:
+        """Detect 'bypass': mission solved with raw primitives, no plugin built.
+
+        When the same goal family is bypassed EASYAGENT_BYPASS_THRESHOLD times
+        (default 2), the capability workflow is forced: run ensure_capability
+        with the recorded shell transcript as the scaffold recipe. Set
+        EASYAGENT_BYPASS_AUTO=0 to disable the check entirely.
+        """
+        try:
+            if os.environ.get("EASYAGENT_BYPASS_AUTO", "1") in (
+                    "0", "false", "no", ""):
+                return
+            if status != "done":
+                return
+            if float(st.get("completion_score") or 0) < 3:
+                return
+            if "Mission stopped" in str(summary or ""):
+                return
+            counts = st.get("tool_counts") or {}
+            if any(counts.get(t) for t in self._BUILDER_TOOLS):
+                return  # agent already used the capability workflow
+            primitive = sum(counts.get(t, 0) for t in self._PRIMITIVE_TOOLS)
+            if primitive < _env_int("EASYAGENT_BYPASS_PRIMITIVE_THRESHOLD", 3):
+                return
+            mission = self.store.get_mission(st["mission_id"])
+            goal = mission.goal if mission is not None else ""
+            sig = _goal_sig(goal)
+            cmds = self._shell_transcript(run_id)
+            detail = json.dumps({"goal": goal[:200], "commands": cmds[:10]},
+                                ensure_ascii=False)
+            self.store.record_bypass(sig, st["mission_id"], primitive,
+                                     detail)
+            n = self.store.count_bypasses(sig)
+            self._emit(run_id, "bypass",
+                       {"goal_sig": sig, "count": n,
+                        "primitive_calls": primitive})
+            self.store.append_learning(
+                f"bypass #{n} for goal family '{sig}': mission solved with "
+                f"{primitive} raw shell/file calls instead of building a "
+                f"plugin. Goal: {goal[:120]}",
+                ["bypass"])
+            if n >= _env_int("EASYAGENT_BYPASS_THRESHOLD", 2):
+                self._emit(run_id, "scaffold_suggested",
+                           {"goal_sig": sig, "bypasses": n})
+                self._force_scaffold(run_id, st, goal, sig, cmds, n)
+        except Exception:
+            pass  # bypass accounting must never break mission teardown
+
+    def _shell_transcript(self, run_id: str) -> list[str]:
+        """Recorded shell.exec commands for a run, in order."""
+        cmds: list[str] = []
+        try:
+            for ev in self.store.get_events(run_id):
+                if ev.type != "tool_call":
+                    continue
+                payload = ev.payload if isinstance(ev.payload, dict) else {}
+                if payload.get("name") != "shell.exec":
+                    continue
+                cmd = (payload.get("args") or {}).get("command")
+                if cmd:
+                    cmds.append(str(cmd))
+        except Exception:
+            pass
+        return cmds
+
+    def _force_scaffold(self, run_id: str, st: dict, goal: str, sig: str,
+                        cmds: list[str], n: int) -> None:
+        """Bypass threshold hit: force the capability workflow.
+
+        Runs CapabilityDiscovery.ensure_capability with a planner built from
+        the recorded shell transcript, so the 'macro' becomes a real plugin
+        candidate. It still passes every promote gate (fixtures, determinism,
+        leak review, judge + EASYAGENT_GATE_POLICY).
+        """
+        cmds = [c for c in cmds if c][:10]
+        if not cmds or self.registry is None:
+            return
+        try:
+            from easyagent.discovery import CapabilityDiscovery
+        except Exception:
+            return
+
+        def _planner(need: str, docs_text: str, ctx: dict) -> dict:
+            return {"kind": "shell", "commands": list(cmds)}
+
+        name = f"bypass-{sig}-{n}"[:48]
+        recipe_json = json.dumps({"kind": "shell", "commands": cmds},
+                                 ensure_ascii=False)
+        try:
+            self.store.append_learning(
+                f"bypass threshold hit for '{sig}': forcing scaffold from "
+                f"recorded shell transcript.\nrecipe: {recipe_json}",
+                ["bypass", "scaffold_suggested", "recipe"])
+        except Exception:
+            pass
+        disc = CapabilityDiscovery(
+            registry=self.registry, store=self.store, planner=_planner,
+            max_steps=5, max_wall_s=120)
+        try:
+            plugin = disc.ensure_capability(
+                goal,
+                {"tool_name": name,
+                 "description": f"auto-scaffolded from bypassed mission: "
+                                f"{goal[:80]}",
+                 "planner": _planner})
+        except Exception:
+            plugin = None
+        self._emit(run_id, "bypass_scaffold",
+                   {"goal_sig": sig, "plugin": plugin})
 
 
 # ------------------------------------------------- module-level glue (server.py)

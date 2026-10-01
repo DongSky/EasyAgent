@@ -1,7 +1,7 @@
-"""ModelClient: Hermes-series reasoning model via OpenRouter /chat/completions.
+"""ModelClient: chat model via OpenRouter /chat/completions.
 
 - Model id comes only from the ``EASYAGENT_MODEL`` environment variable (never
-  hard-coded: any Hermes-series model id on OpenRouter is acceptable).
+  hard-coded: any OpenRouter model id is acceptable; Nemotron verified).
 - API key comes only from ``OPENROUTER_API_KEY``. The key is never written to
   any file and never logged.
 - ``EASYAGENT_MOCK_LLM=1`` switches to :class:`MockClient`, which replays a
@@ -55,7 +55,7 @@ class MockClient:
     ]
 
     def __init__(self, model: str | None = None):
-        self.model = model or os.environ.get("EASYAGENT_MODEL", "mock-hermes")
+        self.model = model or os.environ.get("EASYAGENT_MODEL", "mock-model")
         self._cycle = itertools.cycle(self._TRAJECTORY)
         self.calls = 0
 
@@ -70,7 +70,7 @@ class MockClient:
 
 
 class ModelClient:
-    """Hermes-series chat model via OpenRouter.
+    """Chat model via OpenRouter.
 
     ``chat(messages, tools=None)`` returns ``{"content", "tool_calls", "usage"}``
     where ``tool_calls`` is a list of ``{"id", "name", "arguments"}`` and
@@ -92,9 +92,9 @@ class ModelClient:
         model = model or os.environ.get("EASYAGENT_MODEL")
         if not model:
             raise LLMError(
-                "EASYAGENT_MODEL is not set. Set it to a Hermes-series model id "
-                "on OpenRouter (any Hermes model id of your choice), e.g. "
-                "export EASYAGENT_MODEL=<hermes-model-id-on-openrouter>. "
+                "EASYAGENT_MODEL is not set. Set it to a Nemotron model id "
+                "on OpenRouter, e.g. "
+                "export EASYAGENT_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free. "
                 "No default model is baked into the code on purpose."
             )
         api_key = api_key or os.environ.get("OPENROUTER_API_KEY")

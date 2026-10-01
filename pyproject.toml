@@ -14,8 +14,9 @@ dependencies = [
     "httpx",
 ]
 
-[project.optional-dependencies]
-typesafe = ["typesafe-sdk"]
+# NOTE: Jev is called via the workspace skill CLI
+# (~/workspace/skills/typesafe/bin/jev), not via typesafe-sdk, so there is
+# intentionally no typesafe optional extra here.
 
 [tool.setuptools.packages.find]
 include = ["easyagent*"]

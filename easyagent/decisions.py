@@ -9,13 +9,18 @@ Access method (per workspace skill ``typesafe``):
 - :class:`DecisionProvider`: ``decide(q: DecisionQuestion) -> Decision``.
 - :class:`JevProvider`: subprocess call to the CLI. Any CLI failure, timeout,
   or unavailability raises :class:`ProviderUnavailable` (the caller degrades).
-- :class:`FallbackProvider`: Hermes main model (``llm.py`` ModelClient) with a
+- :class:`FallbackProvider`: main model (``llm.py`` ModelClient) with a
   strict self-judgment prompt, parsing yes/no/choice/score.
 - :class:`MockProvider`: canned decisions for offline smoke tests.
 - :func:`make_provider`: ``JEV_ENABLED`` (default 1) and a usable CLI ->
   :class:`JevProvider`, otherwise :class:`FallbackProvider`.
 - Four gates: ``risk_gate``, ``gap_triage``, ``completion_score``,
   ``plugin_judge``.
+- Degradation chain when Jev is unreachable: Jev -> fallback subagent judge
+  (:class:`FallbackProvider`, the main model as subagent judge) -> :func:`gate_policy`.
+  ``EASYAGENT_GATE_POLICY`` selects the last resort: ``open`` (fail-open,
+  the historical default), ``ask`` (hand to a human), or ``halt`` (stop).
+  ``risk_gate`` is always fail-closed (any provider error -> require a human).
 
 Logging: info level only; question ids and model id may be logged, never the
 request body or any credential material.
@@ -62,6 +67,26 @@ except ImportError:  # contracts.py not delivered yet
 
 class ProviderUnavailable(Exception):
     """The decision provider cannot serve right now; caller should degrade."""
+
+
+class GateHalted(Exception):
+    """No decision provider could serve and EASYAGENT_GATE_POLICY=halt.
+
+    Callers must stop the gated operation instead of degrading.
+    """
+
+
+def gate_policy() -> str:
+    """Degradation policy when no decision provider can serve.
+
+    Chain: Jev -> fallback subagent judge (FallbackProvider) -> policy.
+
+    - ``open`` (default): fail-open, keep the old permissive behavior.
+    - ``ask``: hand to a human (triage -> "ask"; promote -> held pending_human).
+    - ``halt``: stop the operation (raise GateHalted / refuse promotion).
+    """
+    v = os.environ.get("EASYAGENT_GATE_POLICY", "open").strip().lower()
+    return v if v in ("open", "ask", "halt") else "open"
 
 
 def _default_cli() -> str:
@@ -266,7 +291,7 @@ class JevProvider(DecisionProvider):
         raise ProviderUnavailable(f"unknown question kind: {kind}")
 
 
-# ------------------------------------------------------- Fallback (Hermes LLM)
+# ------------------------------------------------------- Fallback (main-model LLM)
 
 _FALLBACK_SYSTEM = (
     "You are a strict decision judge. Answer ONLY with the requested format, "
@@ -275,7 +300,7 @@ _FALLBACK_SYSTEM = (
 
 
 class FallbackProvider(DecisionProvider):
-    """Self-judgment via the Hermes main model (llm.py) with a strict prompt."""
+    """Self-judgment via the main model (llm.py) with a strict prompt."""
 
     def __init__(self, client=None):
         if client is None:

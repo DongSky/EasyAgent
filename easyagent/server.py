@@ -86,6 +86,7 @@ class PromoteRequest(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start the registry hot-reload watcher (1s poll) on server startup."""
+    reg = None
     try:
         registry_mod = _load_sibling("registry")
         if registry_mod is not None:
@@ -98,6 +99,12 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     yield
+    try:
+        stop = getattr(reg, "stop_watch", None)
+        if callable(stop):
+            stop()
+    except Exception:
+        pass
 
 
 app = FastAPI(title="EasyAgent", version="0.1.0", lifespan=lifespan)

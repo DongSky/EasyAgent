@@ -109,7 +109,12 @@ class CapabilityDiscovery:
         return _lazy_module("easyagent.tools.meta")
 
     def _gap_triage(self, need: str) -> str:
-        """Jev gate 2: explore | skip | ask. Fail-open to 'explore'."""
+        """Jev gate 2: explore | skip | ask.
+
+        Degradation chain: Jev -> fallback subagent judge -> EASYAGENT_GATE_POLICY
+        (open -> "explore", ask -> "ask", halt -> raise GateHalted).
+        """
+        decisions = None
         try:
             decisions = _lazy_module("easyagent.decisions")
             if decisions is not None:
@@ -121,7 +126,16 @@ class CapabilityDiscovery:
                     return verdict
         except Exception:
             pass
-        return "explore"
+        policy = "open"
+        if decisions is not None:
+            try:
+                policy = decisions.gate_policy()
+            except Exception:
+                pass
+        if policy == "halt":
+            exc_cls = getattr(decisions, "GateHalted", RuntimeError)
+            raise exc_cls(f"gap_triage unavailable for '{need}' (policy=halt)")
+        return "ask" if policy == "ask" else "explore"
 
     def _learn(self, text: str, tags: list[str] | None = None) -> None:
         mem = self._memory()
@@ -147,7 +161,15 @@ class CapabilityDiscovery:
             return need
 
         # 1.5 Jev gate 2: triage the gap before building anything.
-        triage = self._gap_triage(need)
+        # policy=halt raises GateHalted -> stop, do not build.
+        try:
+            triage = self._gap_triage(need)
+        except Exception:
+            self._learn(
+                f"gap triage for '{need}': halted (no decision provider); "
+                "no build attempted",
+                ["gap", "halted"])
+            return None
         if triage in ("skip", "ask"):
             self._learn(
                 f"gap triage for '{need}': {triage}; no build attempted",

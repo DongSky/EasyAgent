@@ -1,6 +1,6 @@
 # EasyAgent Rewrite — Build Spec (v1)
 
-目标：单进程 + SQLite + 文件系统，三层架构。Hermes 系列模型（经 OpenRouter，可配置）做推理底座。
+目标：单进程 + SQLite + 文件系统，三层架构。Nemotron 模型（经 OpenRouter，`EASYAGENT_MODEL` 可配置）做推理底座。
 仓库：~/workspace/easyagent-rewrite。只读参考：/tmp/easyagent-analysis（原仓库浅克隆，commit 7137c77，绝不修改）。
 
 ## 0. 目录布局
@@ -8,12 +8,12 @@
 ```
 ~/workspace/easyagent-rewrite/
   SPEC.md
-  pyproject.toml            # python>=3.11; deps: fastapi, uvicorn, pydantic, httpx; optional: typesafe-sdk
+  pyproject.toml            # python>=3.11; deps: fastapi, uvicorn, pydantic, httpx; optional: typesafe = ["typesafe-sdk"]（已作废，Jev 只走 skill CLI）
   easyagent/
     __init__.py
     contracts.py            # ≤10 个 pydantic 模型（见 §1）
     store.py                # SQLite（见 §2）
-    llm.py                  # ModelClient：可配置，默认 Hermes 系列经 OpenRouter；EASYAGENT_MOCK_LLM=1 时走 Mock
+    llm.py                  # ModelClient：模型只由 EASYAGENT_MODEL 指定（已验证 Nemotron 经 OpenRouter）；EASYAGENT_MOCK_LLM=1 时走 Mock
     decisions.py            # DecisionProvider 接口 / JevProvider（TypeSafe 原生 API）/ FallbackProvider
     registry.py             # ToolRegistry + 文件 watcher 热重载 + fixtures 转正门槛
     discovery.py            # capability gap 流程
@@ -85,32 +85,37 @@
    `scaffold` 写 `plugins/inbox/<name>/{manifest.json, tool.json, impl.py, fixtures.json}` → `promote`。
    失败 → 返回 None，并 `append_learning("explored <need>: failed because ...")`。
 
-## 5. Decisions（decisions.py）—— ★ Jev 走 TypeSafe 原生 API（OpenRouter 方案作废）
+## 5. Decisions（decisions.py）—— ★ Jev 走 workspace skill CLI（SDK/原生 HTTP 方案作废）
 
-- `class DecisionProvider`：`decide(q: DecisionQuestion) -> Decision`。`class ProviderUnavailable(Exception)`。
+- `class DecisionProvider`：`decide(q: DecisionQuestion) -> Decision`。`class ProviderUnavailable(Exception)`（任一 provider 不可用时抛）。`class GateHalted(Exception)`（降级策略为 halt 且无可用 provider 时抛，调用方必须停止）。
 - `JevProvider`：
-  - 优先用官方 SDK：`pip install typesafe-sdk`；`from typesafe_sdk import TypeSafeClient`；
-    `client.system_one(state=..., questions=...)`。SDK 默认从环境变量 `TYPESAFE_API_KEY` 读 key。
-  - 无 SDK 时降级为 httpx 直调：`POST https://api.typesafe.ai/v1/systemone`，
-    header `Authorization: Bearer $TYPESAFE_API_KEY`。
+  - 唯一实现：subprocess 调 workspace skill CLI `~/workspace/skills/typesafe/bin/jev`
+    （`--state`/`--questions` 传 noul|choice|score 问题，`--model` 指定模型）；
+    认证由 CLI 内部经保险库 surrogate 处理，代码零接触原始 key、不设 secret 环境变量。
   - questions 形状：`{qid: {"type": "noul"|"choice"|"score", "instructions": ..., "criteria": ...}}`；
     state 可为 string/object/array；取返回的 answers 概率 → `Decision(answer, probability, provider="jev")`。
-  - 默认模型 `jev-latest`（不硬编码版本号，可配 `JEV_MODEL` 环境变量）。
-  - 日志：SDK/httpx 日志级别保持 info 或 off，绝不打 request body；key 绝不进日志。
-  - 无 `TYPESAFE_API_KEY` 或任何异常 → 抛 `ProviderUnavailable`（由调用方降级）。
-- `FallbackProvider`：用 `llm.py` 的 ModelClient + 严格 prompt 自判，解析 yes/no/choice/score。
-- `make_provider() -> DecisionProvider`：`JEV_ENABLED`（默认 1）且有 key → `JevProvider`；
-  调用方 `try: decide() except ProviderUnavailable: fallback.decide()`。这是全架构唯一允许双实现的地方。
+  - 默认模型 `jev-latest`（不硬编码版本号，可配 `JEV_MODEL` 环境变量；`JEV_TIMEOUT` 默认 60s；`JEV_CLI` 可覆盖 CLI 路径）。
+  - CLI 不可用（`JEV_ENABLED=0`、文件不存在/不可执行）或调用失败/超时/返回非 JSON → 抛 `ProviderUnavailable`。
+  - 日志级别保持 info 或 off，绝不打 request body；key 绝不进日志（代码里根本没有 key）。
+- `FallbackProvider`：subagent judge——用 `llm.py` 的 ModelClient + 严格 prompt 自判，解析 yes/no/choice/score。Jev 不可用时先降级到它。
+- `make_provider() -> DecisionProvider`：`JEV_ENABLED`（默认 1）且 jev CLI 可用 → `JevProvider`，
+  否则 → `FallbackProvider`。这是全架构唯一允许双实现的地方。
+- 降级链：**Jev → subagent judge（FallbackProvider）→ `EASYAGENT_GATE_POLICY`**。
+  两个 provider 都不可用时的最终策略（默认 `open`，保持历史行为）：
+  - `open`：fail-open。`gap_triage` → `explore`；`plugin_judge` → 照样转正（记录 `unavailable (fail-open)`）。
+  - `ask`：转人工。`gap_triage` → `ask`；`plugin_judge` → 不转正，记 `pending_human` 留在 inbox 等人工。
+  - `halt`：停止。`gap_triage` 抛 `GateHalted`（`ensure_capability` 捕获后记 learning 并返回 `None`，不构建）；
+    `plugin_judge` → 拒绝转正（记 `halted`）。
 - 四个门控位（kind 映射）：
-  1. 工具风险 `risk_gate(tool_name, args) -> bool`：noul("这个工具调用有风险吗")，P(risky)≥0.5 → 需人工。
-  2. gap 分诊 `gap_triage(need) -> explore|skip|ask`：choice 三选一。
-  3. mission 完成度 `completion_score(summary) -> 0..5`：score。
-  4. 插件转正裁判 `plugin_judge(name, fixture_report) -> bool`：noul("该插件是否达到转正标准")。
+  1. 工具风险 `risk_gate(tool_name, args) -> bool`：noul("这个工具调用有风险吗")，P(risky)≥0.5 → 需人工。**永远 fail-closed**：决策异常 → 要求人工确认。
+  2. gap 分诊 `gap_triage(need) -> explore|skip|ask`：choice 三选一；不可用时走 `EASYAGENT_GATE_POLICY`。
+  3. mission 完成度 `completion_score(summary) -> 0..5`：score；异常 → 中性 3.0。
+  4. 插件转正裁判 `plugin_judge(name, fixture_report) -> bool`：noul("该插件是否达到转正标准")；不可用时走 `EASYAGENT_GATE_POLICY`。
 
 ## 6. LLM（llm.py）
 
 - `ModelClient(model: str | None)`：model 默认取环境变量 `EASYAGENT_MODEL`；
-  未设置则报错并提示设置为 OpenRouter 上的 Hermes 系列模型 id（不要在代码里写死某个具体模型）。
+  未设置则报错并提示设置 OpenRouter 上的 Nemotron 模型 id（不要在代码里写死某个具体模型）。
   经 OpenRouter `/chat/completions`（httpx），key 只从 `OPENROUTER_API_KEY` 读。
 - `chat(messages, tools=None) -> {content, tool_calls, usage}`；usage 累计 cost 供熔断。
 - `EASYAGENT_MOCK_LLM=1` → `MockClient`：返回固定 canned ReAct 轨迹（thought→tool_call→observation→done），
@@ -127,6 +132,14 @@
 - steer：`queue_command(run_id, SteerCommand)`；pause 挂起、resume 继续、cancel 终止、redirect 把 message
   注入下一步 context。`awaiting_confirm` 状态下 steer action=resume 视为人工放行。
 - 结束时调 `completion_score`（decisions 门控 3），<3 分且步数有余 → 继续迭代；否则写总结。
+- **绕路计数器**（防 Agent 用裸 shell 绕过 capability→plugin 主链路）：
+  mission 成功结束（`completion_score` ≥ 3，非熔断）且原始工具（`shell.exec`/`file.write`/`file.edit`）
+  调用 ≥ `EASYAGENT_BYPASS_PRIMITIVE_THRESHOLD`（默认 3）次、期间没调过 `scaffold`/`plugin.promote` →
+  记一次 bypass（`bypass_events` 表按目标签名计数 + learning + `bypass` 事件）。
+  同一目标家族累计 ≥ `EASYAGENT_BYPASS_THRESHOLD`（默认 2）次 → 强制走发现层：
+  用本次录制的 shell transcript 做 recipe（`{"kind": "shell", "commands": [...]}`），
+  调 `ensure_capability` 自动 scaffold 出 macro 插件（仍过全部转正门）。
+  `EASYAGENT_BYPASS_AUTO=0` 关闭。一次性临时命令（< 阈值）不受影响。
 
 ## 8. Server（server.py，FastAPI）
 
@@ -150,7 +163,9 @@
   （只许 http/https、禁私网 IP/元数据地址、≤2MB、20s 超时）。
 - `probe {method, url, headers?, body?}` → `{ok, status, data}`：同 SSRF 防护；成功调用记为 recipe 返回。
 - `scaffold {name, description, recipe}` → 写 `plugins/inbox/<name>/{manifest.json, tool.json, impl.py, fixtures.json}`；
-  `impl.py` 按 recipe 模板生成（httpx 调用），fixtures.json 至少 1 个用例。
+  recipe 有两种：`{"url": ...}`（HTTP，`impl.py` 按 recipe 模板生成 httpx 调用）或
+  `{"kind": "shell", "commands": [...], "cwd"?}`（macro 插件：`impl.py` 用 `shlex.split` 无 `shell=True`
+  按序重放录制的命令，单条 30s 超时，输出截断；`trust: untrusted`）。fixtures.json 至少 1 个用例。
 - 首批内置工具在 `tools/__init__.py` 里向 registry 注册为 `trusted`（shell.exec 除外：`untrusted`）。
 
 ## 10. Memory（memory.py）
@@ -170,8 +185,11 @@
 
 ## 12. 环境变量（绝不进仓库）
 
-`OPENROUTER_API_KEY`（llm）、`TYPESAFE_API_KEY`（Jev，原生 API）、`EASYAGENT_MODEL`、
-`JEV_ENABLED=1`、`JEV_MODEL`（默认 jev-latest）、`EASYAGENT_WORKSPACE`、`EASYAGENT_MOCK_LLM=1`（测试）。
+`OPENROUTER_API_KEY`（llm）、`EASYAGENT_MODEL`、`JEV_ENABLED=1`、`JEV_MODEL`（默认 jev-latest）、
+`JEV_TIMEOUT`（默认 60s）、`JEV_CLI`（覆盖 skill CLI 路径）、`EASYAGENT_GATE_POLICY`（open/ask/halt，默认 open）、
+`EASYAGENT_RISK_THRESHOLD`（默认 0.5）、`EASYAGENT_BYPASS_AUTO=1`、`EASYAGENT_BYPASS_PRIMITIVE_THRESHOLD=3`、
+`EASYAGENT_BYPASS_THRESHOLD=2`、`EASYAGENT_WORKSPACE`、`EASYAGENT_MOCK_LLM=1`（测试）。
+Jev 认证走保险库 surrogate（CLI 内部处理），**没有** `TYPESAFE_API_KEY` 这类 secret 环境变量。
 
 ## 13. 全 worker 硬约束
 
