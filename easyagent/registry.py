@@ -110,6 +110,67 @@ def _match_expect(result: Any, expect: dict) -> tuple[bool, str]:
     return True, ""
 
 
+# ------------------------------------------------- RRSI regularization
+# The harness that improves itself is itself constrained (RRSI,
+# arXiv:2609.24972): proposal/selection are regularized so the loop cannot
+# game its own evaluator. Ported here as four gates on the plugin lifecycle:
+#   1. leakage review  — promote() rejects impls that hardcode fixture answers
+#   2. noise baseline   — every promotion needs >=1 fixture + deterministic re-runs
+#   3. cost rules       — per-tool usage ledger; mission circuit breakers stay
+#                        the hard ceiling (max_steps / max_cost / max_wall_clock)
+#   4. pruning          — prune() demotes tools that fail too often or go stale
+
+
+def _string_literals(obj: Any, _min: int = 12) -> set[str]:
+    """Collect distinctive string literals from a JSON-ish structure."""
+    out: set[str] = set()
+
+    def walk(o: Any) -> None:
+        if isinstance(o, str):
+            s = o.strip()
+            if len(s) >= _min:
+                out.add(s)
+        elif isinstance(o, dict):
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, (list, tuple)):
+            for v in o:
+                walk(v)
+
+    walk(obj)
+    return out
+
+
+def _leakage_review(impl_source: str, fixtures: list) -> list[str]:
+    """RRSI 'leakage review': does impl.py memorize the fixture answers?
+
+    A promotion must prove the implementation generalizes. An impl that
+    contains both a fixture's distinctive input literal and its expected
+    output literal is treated as a hardcoded answer, not a capability.
+    """
+    findings: list[str] = []
+    if "fixtures.json" in impl_source:
+        findings.append("impl.py references fixtures.json (test-data leakage)")
+    for fx in fixtures or []:
+        arg_lits = _string_literals(fx.get("args"))
+        exp_lits = _string_literals(fx.get("expect"))
+        leaked = False
+        for a in sorted(arg_lits):
+            for e in sorted(exp_lits):
+                if a != e and a in impl_source and e in impl_source:
+                    leaked = True
+                    break
+            if leaked:
+                break
+        if leaked:
+            findings.append(
+                f"fixture '{fx.get('name', '?')}': impl.py contains both the "
+                "distinctive input literal and the expected output literal "
+                "(answer appears hardcoded)"
+            )
+    return findings
+
+
 class ToolRegistry:
     """Registry of tools loaded from the plugins directory."""
 
@@ -139,6 +200,9 @@ class ToolRegistry:
         self._keys: dict[str, str] = {}  # name -> content key of loaded version
         self._confirmations: dict[str, int] = {}
         self._last_fail_key: dict[str, str] = {}  # name -> content key of last recorded rollback
+        # RRSI cost-rules ledger: per-tool call accounting (in-memory; also
+        # persisted to store.tool_usage when a store is attached).
+        self._usage: dict[str, dict] = {}
         self._watch_thread: threading.Thread | None = None
         self._watch_stop = threading.Event()
 
@@ -363,7 +427,15 @@ class ToolRegistry:
                 and self.confirmations(name) < self.confirm_threshold):
             if self._risk_gate(name, args or {}):
                 raise ApprovalRequired(name, args or {})
-        return tool.run(args or {}, ctx or {})
+        started = time.time()
+        try:
+            result = tool.run(args or {}, ctx or {})
+        except Exception:
+            self._note_usage(name, False, (time.time() - started) * 1000.0)
+            raise
+        ok = not (isinstance(result, dict) and result.get("ok") is False)
+        self._note_usage(name, ok, (time.time() - started) * 1000.0)
+        return result
 
     def call_approved(self, name: str, args: dict | None = None,
                       ctx: dict | None = None) -> dict:
@@ -372,7 +444,98 @@ class ToolRegistry:
         tool = self.get(name)
         if tool is None:
             raise KeyError(f"unknown tool: {name}")
-        return tool.run(args or {}, ctx or {})
+        started = time.time()
+        try:
+            result = tool.run(args or {}, ctx or {})
+        except Exception:
+            self._note_usage(name, False, (time.time() - started) * 1000.0)
+            raise
+        ok = not (isinstance(result, dict) and result.get("ok") is False)
+        self._note_usage(name, ok, (time.time() - started) * 1000.0)
+        return result
+
+    # ------------------------------------------------- usage ledger / pruning
+    def _note_usage(self, name: str, ok: bool, ms: float) -> None:
+        """Record one tool call in the cost-rules ledger. Never breaks calls."""
+        with self._lock:
+            u = self._usage.setdefault(
+                name, {"calls": 0, "failures": 0, "total_ms": 0.0, "last_call": 0.0})
+            u["calls"] += 1
+            if not ok:
+                u["failures"] += 1
+            u["total_ms"] += ms
+            u["last_call"] = time.time()
+        if self.store is not None:
+            try:
+                self.store.record_tool_call(name, ok, ms)
+            except Exception:
+                pass
+
+    def usage(self, name: str | None = None) -> list[dict]:
+        """Per-tool call accounting (RRSI cost rules)."""
+        rows: list[dict] = []
+        with self._lock:
+            items = ([(name, self._usage[name])] if name and name in self._usage
+                     else list(self._usage.items()))
+            for tname, u in items:
+                calls = u["calls"]
+                rows.append({
+                    "name": tname, "calls": calls, "failures": u["failures"],
+                    "failure_rate": (u["failures"] / calls) if calls else 0.0,
+                    "total_ms": round(u["total_ms"], 1),
+                    "last_call": u["last_call"],
+                })
+        return rows
+
+    def prune(self, dry_run: bool = True, min_calls: int = 5,
+              max_failure_rate: float = 0.5, stale_days: float = 30) -> dict:
+        """RRSI 'pruning': demote active plugins that fail too often or went stale.
+
+        A plugin is pruned when it has >= min_calls with failure_rate >=
+        max_failure_rate, or when it was never called and its directory is
+        older than stale_days. Builtin tools are never pruned. Pruned plugins
+        are moved to _archive/pruned_<name>_<stamp>/ and unregistered.
+        """
+        now = time.time()
+        pruned: list[dict] = []
+        kept: list[str] = []
+        for tname, tooldef in list(self._tools.items()):
+            if not (tooldef.manifest_path or "").startswith(self.active_dir + os.sep):
+                continue  # builtins are never pruned
+            with self._lock:
+                u = self._usage.get(tname, {"calls": 0, "failures": 0})
+            calls, fails = u["calls"], u["failures"]
+            rate = (fails / calls) if calls else 0.0
+            reason = None
+            if calls >= min_calls and rate >= max_failure_rate:
+                reason = f"failure rate {rate:.0%} over {calls} calls"
+            elif calls == 0:
+                try:
+                    mtime = os.path.getmtime(os.path.join(self.active_dir, tname))
+                except OSError:
+                    mtime = now
+                age_days = (now - mtime) / 86400.0
+                if age_days > stale_days:
+                    reason = f"never called in {age_days:.0f} days"
+            if reason is None:
+                kept.append(tname)
+                continue
+            pruned.append({"name": tname, "reason": reason})
+            if not dry_run:
+                self._demote(tname, reason)
+        return {"ok": True, "dry_run": dry_run, "pruned": pruned, "kept": kept}
+
+    def _demote(self, name: str, reason: str) -> None:
+        with self._lock:
+            self._tools.pop(name, None)
+            self._keys.pop(name, None)
+            self._versions.pop(name, None)
+        src = os.path.join(self.active_dir, name)
+        if os.path.isdir(src):
+            os.makedirs(self.archive_dir, exist_ok=True)
+            stamp = time.strftime("%Y%m%d%H%M%S")
+            shutil.move(src, os.path.join(self.archive_dir, f"pruned_{name}_{stamp}"))
+        self._record(name, "?", {"reason": reason}, "pruned")
 
     # ------------------------------------------------------------------ promote
     def promote(self, name: str) -> dict:
@@ -401,6 +564,7 @@ class ToolRegistry:
             return {"ok": False, "reason": f"impl.py failed to load: {exc}"}
 
         failures: list[dict] = []
+        first_results: list[tuple] = []
         for fx in fixtures or []:
             fx_name = fx.get("name", "?")
             try:
@@ -412,10 +576,50 @@ class ToolRegistry:
             ok, why = _match_expect(result, fx.get("expect") or {})
             if not ok:
                 failures.append({"fixture": fx_name, "error": why, "result": result})
+            else:
+                first_results.append((fx_name, fx, result))
         if failures:
             self._record(name, version, dict(manifest),
                          "rejected", {"failures": failures})
             return {"ok": False, "failures": failures}
+
+        # --- RRSI gate 1+2: noise baseline. Every promotion needs at least one
+        # fixture, and every fixture must be deterministic across re-runs.
+        if not (fixtures or []):
+            reason = ("no fixtures: promotion requires at least one offline "
+                      "test case (RRSI noise-baseline rule)")
+            self._record(name, version, dict(manifest), "rejected", {"reason": reason})
+            return {"ok": False, "reason": reason}
+        for fx_name, fx, result in first_results:
+            try:
+                again = module.run(fx.get("args") or {}, {})
+            except Exception as exc:
+                failures.append({"fixture": fx_name,
+                                 "error": f"re-run raised {type(exc).__name__}: {exc}"})
+                continue
+            if (json.dumps(again, sort_keys=True, default=str)
+                    != json.dumps(result, sort_keys=True, default=str)):
+                failures.append({"fixture": fx_name,
+                                 "error": "non-deterministic: re-run result differs "
+                                          "(RRSI noise-baseline rule)"})
+        if failures:
+            self._record(name, version, dict(manifest),
+                         "rejected", {"failures": failures})
+            return {"ok": False, "failures": failures}
+
+        # --- RRSI gate 3: leakage review. The impl must generalize, not
+        # memorize the fixture answers.
+        try:
+            with open(os.path.join(src, "impl.py"), "r", encoding="utf-8") as f:
+                impl_source = f.read()
+        except OSError:
+            impl_source = ""
+        leaks = _leakage_review(impl_source, fixtures or [])
+        if leaks:
+            reason = "leakage review failed: " + "; ".join(leaks)
+            self._record(name, version, dict(manifest),
+                         "rejected", {"reason": reason, "leaks": leaks})
+            return {"ok": False, "reason": reason, "leaks": leaks}
 
         dst = os.path.join(self.active_dir, name)
         try:
@@ -430,7 +634,9 @@ class ToolRegistry:
             return {"ok": False, "reason": f"activation failed: {exc}"}
         self._register(tooldef, status="promoted")
         return {"ok": True, "name": tooldef.name, "version": tooldef.version,
-                "fixtures_passed": len(fixtures or [])}
+                "fixtures_passed": len(fixtures or []),
+                "regularization": {"noise_baseline": "deterministic re-runs ok",
+                                   "leakage_review": "clean"}}
 
 
 # ------------------------------------------------- module-level glue (server.py)

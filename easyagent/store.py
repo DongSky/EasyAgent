@@ -59,6 +59,13 @@ CREATE TABLE IF NOT EXISTS learnings (
     tags_json TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS tool_usage (
+    name TEXT PRIMARY KEY,
+    calls INTEGER NOT NULL DEFAULT 0,
+    failures INTEGER NOT NULL DEFAULT 0,
+    total_ms REAL NOT NULL DEFAULT 0,
+    last_call TEXT
+);
 CREATE INDEX IF NOT EXISTS idx_events_run_seq ON events (run_id, seq);
 CREATE INDEX IF NOT EXISTS idx_runs_mission ON runs (mission_id);
 """
@@ -255,6 +262,33 @@ class Store:
                 " WHERE name=? ORDER BY created_at DESC",
                 (name,),
             ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ---- tool usage ledger (RRSI cost rules: every tool call is accounted) ----
+    def record_tool_call(self, name: str, ok: bool, ms: float) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT INTO tool_usage (name, calls, failures, total_ms, last_call)"
+                " VALUES (?,?,?,?,?)"
+                " ON CONFLICT(name) DO UPDATE SET"
+                " calls=calls+1, failures=failures+excluded.failures,"
+                " total_ms=total_ms+excluded.total_ms, last_call=excluded.last_call",
+                (name, 1, 0 if ok else 1, ms, _now()),
+            )
+
+    def get_tool_usage(self, name: str | None = None) -> list[dict]:
+        with self._lock:
+            if name:
+                rows = self._db.execute(
+                    "SELECT name, calls, failures, total_ms, last_call FROM tool_usage"
+                    " WHERE name=?",
+                    (name,),
+                ).fetchall()
+            else:
+                rows = self._db.execute(
+                    "SELECT name, calls, failures, total_ms, last_call FROM tool_usage"
+                    " ORDER BY calls DESC",
+                ).fetchall()
         return [dict(r) for r in rows]
 
     # ---- learnings ----

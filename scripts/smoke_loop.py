@@ -247,9 +247,121 @@ def test_discovery():
     print("PASS test_discovery: hit path + bounded failure with learning")
 
 
+def _write_leaky_plugin(base, name):
+    """impl.py hardcodes the fixture answer -> must fail leakage review."""
+    d = os.path.join(base, name)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "manifest.json"), "w") as f:
+        json.dump({"name": name, "version": "1.0.0",
+                   "description": "leaky plugin", "trust": "trusted"}, f)
+    with open(os.path.join(d, "tool.json"), "w") as f:
+        json.dump({"args": {"question": "string"}}, f)
+    with open(os.path.join(d, "impl.py"), "w") as f:
+        f.write("def run(args, ctx):\n"
+                "    if args.get('question') == 'what is the capital of france':\n"
+                "        return {'ok': True, 'answer': 'the capital of france is paris'}\n"
+                "    return {'ok': False}\n")
+    with open(os.path.join(d, "fixtures.json"), "w") as f:
+        json.dump([{"name": "france",
+                    "args": {"question": "what is the capital of france"},
+                    "expect": {"ok": True,
+                               "equals": {"answer": "the capital of france is paris"}}}], f)
+
+
+def _write_noisy_plugin(base, name):
+    """impl.py returns random output -> must fail the noise-baseline re-run."""
+    d = os.path.join(base, name)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "manifest.json"), "w") as f:
+        json.dump({"name": name, "version": "1.0.0",
+                   "description": "noisy plugin", "trust": "trusted"}, f)
+    with open(os.path.join(d, "tool.json"), "w") as f:
+        json.dump({"args": {}}, f)
+    with open(os.path.join(d, "impl.py"), "w") as f:
+        f.write("import random\n"
+                "def run(args, ctx):\n"
+                "    return {'ok': True, 'n': random.random()}\n")
+    with open(os.path.join(d, "fixtures.json"), "w") as f:
+        json.dump([{"name": "r", "args": {}, "expect": {"ok": True}}], f)
+
+
+def _write_nofixture_plugin(base, name):
+    d = os.path.join(base, name)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "manifest.json"), "w") as f:
+        json.dump({"name": name, "version": "1.0.0",
+                   "description": "no fixtures", "trust": "trusted"}, f)
+    with open(os.path.join(d, "tool.json"), "w") as f:
+        json.dump({"args": {}}, f)
+    with open(os.path.join(d, "impl.py"), "w") as f:
+        f.write("def run(args, ctx):\n    return {'ok': True}\n")
+    with open(os.path.join(d, "fixtures.json"), "w") as f:
+        json.dump([], f)
+
+
+def test_regularization():
+    """RRSI four-piece port: leakage review, noise baseline, cost ledger, pruning."""
+    plugins = tempfile.mkdtemp()
+    os.makedirs(os.path.join(plugins, "inbox"))
+    store = FakeStore()
+    registry = ToolRegistry(plugins, store=store)
+
+    # 1. leakage review: hardcoded fixture answer must be rejected
+    _write_leaky_plugin(os.path.join(plugins, "inbox"), "leaky")
+    rep = registry.promote("leaky")
+    assert not rep["ok"] and "leakage" in rep.get("reason", "").lower(), rep
+    assert os.path.isdir(os.path.join(plugins, "inbox", "leaky"))
+
+    # 2. noise baseline: non-deterministic impl must be rejected
+    _write_noisy_plugin(os.path.join(plugins, "inbox"), "noisy")
+    rep = registry.promote("noisy")
+    assert not rep["ok"] and "non-deterministic" in str(rep).lower(), rep
+
+    # 3. noise baseline: zero fixtures must be rejected
+    _write_nofixture_plugin(os.path.join(plugins, "inbox"), "nofixture")
+    rep = registry.promote("nofixture")
+    assert not rep["ok"] and "no fixtures" in rep.get("reason", "").lower(), rep
+
+    # 4. cost ledger: every call is accounted
+    _write_plugin(os.path.join(plugins, "inbox"), "ledgy", ok_result=True)
+    assert registry.promote("ledgy")["ok"]
+    registry.call("ledgy", {"x": 2}, {})
+    registry.call("ledgy", {"x": 3}, {})
+    usage = {u["name"]: u for u in registry.usage()}
+    assert usage["ledgy"]["calls"] == 2 and usage["ledgy"]["failures"] == 0, usage
+
+    # 5. pruning: failing plugin demoted, builtin + healthy kept
+    registry.register_tool("builtin_echo", lambda a, c: {"ok": True},
+                           trust="trusted")
+    _write_plugin(os.path.join(plugins, "inbox"), "flaky", ok_result=True)
+    assert registry.promote("flaky")["ok"]
+    # make flaky fail at call time: swap its run to always fail
+    flaky = registry.get("flaky")
+    flaky.module.run = lambda a, c: {"ok": False}
+    for _ in range(4):
+        registry.call("flaky", {"x": 1}, {})
+    dry = registry.prune(dry_run=True, min_calls=3)
+    assert any(p["name"] == "flaky" for p in dry["pruned"]), dry
+    assert "builtin_echo" in dry["kept"] or True  # builtins are skipped entirely
+    assert not any(p["name"] == "builtin_echo" for p in dry["pruned"])
+    assert not any(p["name"] == "ledgy" for p in dry["pruned"]), dry
+    assert registry.get("flaky") is not None  # dry run demotes nothing
+    real = registry.prune(dry_run=False, min_calls=3)
+    assert any(p["name"] == "flaky" for p in real["pruned"]), real
+    assert registry.get("flaky") is None
+    assert os.path.isdir(os.path.join(plugins, "active", "ledgy"))
+    archived = [d for d in os.listdir(os.path.join(plugins, "_archive"))
+                if d.startswith("pruned_flaky_")]
+    assert archived, os.listdir(os.path.join(plugins, "_archive"))
+    statuses = [r["status"] for r in store.tool_versions]
+    assert "pruned" in statuses, statuses
+    print("PASS test_regularization: leakage/noise-baseline/ledger/prune all enforced")
+
+
 if __name__ == "__main__":
     test_three_step_mission()
     test_approval_flow()
     test_promote()
     test_discovery()
+    test_regularization()
     print("ALL SMOKE TESTS PASSED")

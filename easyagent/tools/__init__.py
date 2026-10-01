@@ -20,6 +20,7 @@ _HANDLERS = {
     "memory.search": memory_tools.search,
     "memory.append": memory_tools.append,
     "plugin.promote": plugin_tools.promote,
+    "plugin.prune": plugin_tools.prune,
 }
 
 _INFOS = [shell.TOOL_INFO, *files.TOOL_INFOS, search.TOOL_INFO, *meta.TOOL_INFOS,
