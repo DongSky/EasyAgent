@@ -74,6 +74,7 @@ class CapabilityDiscovery:
         max_steps: int = 10,
         max_wall_s: int = 300,
         planner: Callable[[str, str, dict], Any] | None = None,
+        decisions: Any = None,
     ):
         """
         :param registry: ToolRegistry (or compatible mock).
@@ -82,6 +83,8 @@ class CapabilityDiscovery:
         :param store: optional Store fallback for ``append_learning``.
         :param planner: optional callable ``(need, docs_text, ctx) -> recipe``
             used to turn fetched docs into a scaffold recipe (e.g. an LLM step).
+        :param decisions: optional DecisionProvider for the gap_triage gate
+            (Jev gate 2); ``make_provider()`` default when None.
         """
         self.registry = registry
         self._memory_obj = memory
@@ -89,6 +92,7 @@ class CapabilityDiscovery:
         self.max_steps = max_steps
         self.max_wall_s = max_wall_s
         self.planner = planner
+        self.decisions = decisions
 
     # ------------------------------------------------------------- dependencies
     def _memory(self) -> Any | None:
@@ -103,6 +107,21 @@ class CapabilityDiscovery:
     def _meta(self) -> Any | None:
         """easyagent.tools.meta with fetch_docs/probe/scaffold (or None)."""
         return _lazy_module("easyagent.tools.meta")
+
+    def _gap_triage(self, need: str) -> str:
+        """Jev gate 2: explore | skip | ask. Fail-open to 'explore'."""
+        try:
+            decisions = _lazy_module("easyagent.decisions")
+            if decisions is not None:
+                provider = self.decisions
+                if provider is None:
+                    provider = decisions.make_provider()
+                verdict = decisions.gap_triage(need, provider=provider)
+                if verdict in ("explore", "skip", "ask"):
+                    return verdict
+        except Exception:
+            pass
+        return "explore"
 
     def _learn(self, text: str, tags: list[str] | None = None) -> None:
         mem = self._memory()
@@ -127,6 +146,14 @@ class CapabilityDiscovery:
         if self.registry.get(need) is not None:
             return need
 
+        # 1.5 Jev gate 2: triage the gap before building anything.
+        triage = self._gap_triage(need)
+        if triage in ("skip", "ask"):
+            self._learn(
+                f"gap triage for '{need}': {triage}; no build attempted",
+                ["gap", triage])
+            return None
+
         # 2. memory recipe -> scaffold -> promote
         recipe = self._recipe_from_memory(need)
         if recipe is not None:
@@ -134,6 +161,7 @@ class CapabilityDiscovery:
                 ctx.get("tool_name") or _slug(need),
                 ctx.get("description") or f"auto-built tool for: {need}",
                 recipe,
+                ctx,
             )
             if name:
                 return name
@@ -155,13 +183,18 @@ class CapabilityDiscovery:
                 return recipe
         return None
 
-    def _build_and_promote(self, name: str, description: str, recipe: Any) -> str | None:
+    def _build_and_promote(self, name: str, description: str, recipe: Any,
+                           ctx: dict | None = None) -> str | None:
         meta = self._meta()
         if meta is None:
             return None
         try:
-            meta.scaffold(name=name, description=description, recipe=recipe)
+            res = meta.scaffold(
+                {"name": name, "description": description, "recipe": recipe},
+                ctx or {})
         except Exception:
+            return None
+        if not isinstance(res, dict) or not res.get("ok"):
             return None
         try:
             report = self.registry.promote(name)
@@ -192,7 +225,7 @@ class CapabilityDiscovery:
             docs_url = ctx.get("docs_url")
             if docs_url and not docs_text:
                 try:
-                    doc = meta.fetch_docs(docs_url)
+                    doc = meta.fetch_docs({"url": docs_url}, ctx)
                     docs_text = str((doc or {}).get("text", ""))[:12000]
                 except Exception as exc:
                     reason = f"fetch_docs failed: {exc}"
@@ -216,11 +249,10 @@ class CapabilityDiscovery:
             if isinstance(recipe, dict) and recipe.get("url"):
                 try:
                     probed = meta.probe(
-                        method=recipe.get("method", "GET"),
-                        url=recipe["url"],
-                        headers=recipe.get("headers"),
-                        body=recipe.get("body"),
-                    )
+                        {"method": recipe.get("method", "GET"),
+                         "url": recipe["url"],
+                         "headers": recipe.get("headers"),
+                         "body": recipe.get("body")}, ctx)
                 except Exception as exc:
                     reason = f"probe raised: {exc}"
                     break
@@ -228,7 +260,7 @@ class CapabilityDiscovery:
                     reason = f"probe failed: {(probed or {}).get('status')}"
                     break
             # scaffold + promote
-            built = self._build_and_promote(name, description, recipe)
+            built = self._build_and_promote(name, description, recipe, ctx)
             if built:
                 return built
             reason = f"scaffold/promote failed for '{name}'"

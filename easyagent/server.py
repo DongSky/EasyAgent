@@ -20,6 +20,7 @@ import asyncio
 import importlib
 import json
 import os
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -82,7 +83,24 @@ class PromoteRequest(BaseModel):
     name: str
 
 
-app = FastAPI(title="EasyAgent", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start the registry hot-reload watcher (1s poll) on server startup."""
+    try:
+        registry_mod = _load_sibling("registry")
+        if registry_mod is not None:
+            get_reg = getattr(registry_mod, "get_default_registry", None)
+            if callable(get_reg):
+                reg = get_reg()
+                watch = getattr(reg, "watch", None)
+                if callable(watch):
+                    watch()
+    except Exception:
+        pass
+    yield
+
+
+app = FastAPI(title="EasyAgent", version="0.1.0", lifespan=lifespan)
 
 
 @app.get("/healthz")

@@ -621,6 +621,29 @@ class ToolRegistry:
                          "rejected", {"reason": reason, "leaks": leaks})
             return {"ok": False, "reason": reason, "leaks": leaks}
 
+        # --- Jev gate 4: plugin_judge. Fixtures + RRSI checks passed; the
+        # judge makes the final promotion call. Fail-open (recorded) so a
+        # dead judge can't brick the autonomous loop.
+        judge_report = {"fixtures_passed": len(fixtures or []),
+                        "noise_baseline": "deterministic re-runs ok",
+                        "leakage_review": "clean",
+                        "manifest": dict(manifest)}
+        judge_ok: bool | None = None
+        try:
+            decisions = importlib.import_module("easyagent.decisions")
+            provider = self.decisions
+            if provider is None:
+                provider = decisions.make_provider()
+            judge_ok = bool(decisions.plugin_judge(name, judge_report,
+                                                   provider=provider))
+        except Exception:
+            judge_ok = None
+        if judge_ok is False:
+            self._record(name, version, dict(manifest),
+                         "rejected", {"reason": "plugin_judge declined promotion",
+                                      "report": judge_report})
+            return {"ok": False, "reason": "plugin_judge declined promotion"}
+
         dst = os.path.join(self.active_dir, name)
         try:
             os.makedirs(self.active_dir, exist_ok=True)
@@ -635,6 +658,8 @@ class ToolRegistry:
         self._register(tooldef, status="promoted")
         return {"ok": True, "name": tooldef.name, "version": tooldef.version,
                 "fixtures_passed": len(fixtures or []),
+                "plugin_judge": ("approved" if judge_ok
+                                 else "unavailable (fail-open)"),
                 "regularization": {"noise_baseline": "deterministic re-runs ok",
                                    "leakage_review": "clean"}}
 

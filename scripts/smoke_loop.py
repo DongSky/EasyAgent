@@ -231,20 +231,38 @@ def test_promote():
 
 
 def test_discovery():
+    from easyagent.decisions import Decision
+
+    class _Triage:
+        """Deterministic stub for the gap_triage gate (Jev gate 2)."""
+        def __init__(self, verdict):
+            self.verdict = verdict
+
+        def decide_raw(self, kind, instructions, criteria, state):
+            return Decision(answer=self.verdict, probability=0.9,
+                            provider="stub")
+
     store = FakeStore()
     registry = ToolRegistry(tempfile.mkdtemp(), store=store)
     registry.register_tool("echo", lambda a, c: {"ok": True}, trust="trusted")
-    disc = CapabilityDiscovery(registry, memory=FakeMemory(), store=store)
+    disc = CapabilityDiscovery(registry, memory=FakeMemory(), store=store,
+                              decisions=_Triage("explore"))
     assert disc.ensure_capability("echo", {}) == "echo"  # registry hit
-    # no meta tools installed in this env -> exploration fails gracefully
-    got = disc.ensure_capability("nonexistent-capability", {})
-    assert got is None
-    assert any("nonexistent-capability" in l["text"] for l in store.learnings) or True
+    # gate says skip -> no build attempted, learning recorded
     mem = FakeMemory()
-    disc2 = CapabilityDiscovery(registry, memory=mem, store=store)
-    disc2.ensure_capability("nope", {})
-    assert any("explored nope" in l["text"] for l in mem.learnings), mem.learnings
-    print("PASS test_discovery: hit path + bounded failure with learning")
+    disc2 = CapabilityDiscovery(registry, memory=mem, store=store,
+                               decisions=_Triage("skip"))
+    assert disc2.ensure_capability("nope", {}) is None
+    assert any("gap triage for 'nope': skip" in l["text"]
+               for l in mem.learnings), mem.learnings
+    # gate says explore -> bounded exploration attempted, failure recorded
+    mem2 = FakeMemory()
+    disc3 = CapabilityDiscovery(registry, memory=mem2, store=store,
+                               decisions=_Triage("explore"))
+    assert disc3.ensure_capability("nope", {}) is None
+    assert any("explored nope" in l["text"]
+               for l in mem2.learnings), mem2.learnings
+    print("PASS test_discovery: hit + gap_triage gate + bounded failure with learning")
 
 
 def _write_leaky_plugin(base, name):

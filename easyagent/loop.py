@@ -445,6 +445,20 @@ class MissionRunner:
             "If a key is provided via environment variable, read it from the "
             "environment at call time; never print it or write it to disk."
         )
+        # Operational memory: inject the most recent learnings so past
+        # missions' lessons shape this run (docs: last 20 entries).
+        try:
+            get_learnings = getattr(self.store, "get_learnings", None)
+            learnings = (get_learnings(limit=20)
+                         if callable(get_learnings) else []) or []
+        except Exception:
+            learnings = []
+        learned_lines = [str(l.get("text", "")).strip() for l in learnings
+                         if isinstance(l, dict)
+                         and str(l.get("text", "")).strip()]
+        if learned_lines:
+            system += ("\nOperational memory (learnings from past missions):\n"
+                       + "\n".join(f"- {t}" for t in learned_lines) + "\n")
         messages = [{"role": "system", "content": system}]
         redirect = st.get("pending_redirect")
         if redirect:
