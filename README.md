@@ -81,7 +81,17 @@ PYTHONPATH=$PWD python3 scripts/smoke_loop.py        # 骨架/门控/转正/发�
 PYTHONPATH=$PWD python3 scripts/smoke_gates.py       # 降级策略/绕路计数器/shell scaffold
 EASYAGENT_API_KEY=test-key-123 PYTHONPATH=$PWD python3 scripts/smoke_multiclient.py  # /v1+auth+SSE+webhook+裁剪+通知
 PYTHONPATH=$PWD python3 scripts/verify_audit_fixes.py  # 审计驱动的加固项（泄漏探针/续跑/prune持久化）
+python3 scripts/smoke_console.py                    # 控制操作/预算/断点恢复/事件完整性/输入校验
+node scripts/smoke_frontend.mjs                     # 前端 SSE 竞态/失败展示/文本转义/重连
 ```
+
+浏览器离线交互验证：`python3 scripts/smoke_console.py --serve`，打开
+`http://127.0.0.1:8766`。使用临时数据库、插件目录和工作区，模型为固定测试轨迹，
+不调用真实模型。任务会演示文件读写、读取失败以及无害 `echo` 的人工放行；
+目标包含“持续”时可测试暂停、redirect、继续和取消。
+
+已结束或不在当前进程运行的任务拒绝 steer（HTTP 409）；可通过 resume 接口从检查点新建运行。
+客户端应读到 SSE `end` 事件后再关闭连接，确保终态之后的产物和裁剪报告完整显示。
 
 ## 环境变量
 
@@ -99,6 +109,7 @@ PYTHONPATH=$PWD python3 scripts/verify_audit_fixes.py  # 审计驱动的加固�
 | `EASYAGENT_BYPASS_THRESHOLD` | 同一目标家族绕路几次强制 scaffold，默认 `2` |
 | `EASYAGENT_MOCK_LLM` | `1` 时走 `MockClient`，离线测试 |
 | `EASYAGENT_WORKSPACE` | `file.*` 默认根目录；路径越界拒绝 |
+| `EASYAGENT_PLUGINS` | 插件根目录；默认仓库 `plugins/`，发现、注册表与运行器共用 |
 | `EASYAGENT_MAX_PROMPT_TOOLS` | 发给模型的工具数上限，默认 48；超了先保自愈核心（scaffold/plugin.promote/plugin.merge/plugin.prune/memory.*）再保其他 builtin，其余按调用量裁；裁掉的发 `tools_trimmed` 事件 |
 | `EASYAGENT_DETERMINISM_RUNS` | 转正噪声基线额外重跑次数，默认 2（任一次结果不同即拒绝） |
 | `EASYAGENT_AUTO_PRUNE` | `1` 时每次 run 结束真执行 prune 降级；默认只报告候选（`prune_candidates` 事件） |

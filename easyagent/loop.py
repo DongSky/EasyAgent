@@ -102,7 +102,7 @@ class MissionRunner:
             reg_mod = _lazy("easyagent.registry")
             if reg_mod is not None:
                 here = os.path.dirname(os.path.abspath(__file__))
-                plugins = os.path.join(os.path.dirname(here), "plugins")
+                plugins = os.environ.get("EASYAGENT_PLUGINS", os.path.join(os.path.dirname(here), "plugins"))
                 self.registry = reg_mod.ToolRegistry(plugins, store=self.store)
                 try:
                     self.registry.discover()
@@ -195,7 +195,7 @@ class MissionRunner:
     def queue_command(self, run_id: str, command: Any) -> bool:
         """Enqueue a steer command. Emits a ``steer`` event for visibility."""
         st = self._runs.get(run_id)
-        if st is None:
+        if st is None or self.store.get_run(run_id).status in ("done", "failed", "cancelled"):
             return False
         action, message = _norm_command(command)
         self._emit(run_id, "steer", {"action": action, "message": message})
@@ -580,8 +580,8 @@ class MissionRunner:
         redirect = st.get("pending_redirect")
         if redirect:
             st["pending_redirect"] = None
-            messages.append({"role": "user",
-                             "content": f"[steer redirect] {redirect}"})
+            history.append({"role": "user",
+                            "content": f"[steer redirect] {redirect}"})
         messages.extend(history)
         return messages
 
@@ -602,10 +602,6 @@ class MissionRunner:
         self._emit(run_id, "checkpoint", {"step": step})
 
     def _finish(self, run_id: str, st: dict, status: str, summary: str) -> None:
-        try:
-            self.store.update_run(run_id, status=status)
-        except Exception:
-            pass
         if summary:
             self._emit(run_id, "artifact",
                        {"kind": "summary", "content": str(summary)[:4000]})
@@ -629,6 +625,9 @@ class MissionRunner:
                                         "to demote, or set EASYAGENT_AUTO_PRUNE=1"})
         except Exception:
             pass
+        # SSE treats a terminal RunState as the end of the event log. Publish
+        # it only after all completion events (including prune) are persisted.
+        self.store.update_run(run_id, status=status)
         # Best-effort push notification (mobile clients whose SSE died in
         # the background). Never raises; see easyagent/notify.py.
         try:
@@ -768,7 +767,8 @@ def get_default_runner() -> "MissionRunner":
     """Process-wide default runner (used by server.py entrypoints)."""
     global _default_runner
     if _default_runner is None:
-        _default_runner = MissionRunner()
+        from .registry import get_default_registry
+        _default_runner = MissionRunner(registry=get_default_registry())
     return _default_runner
 
 

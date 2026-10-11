@@ -210,10 +210,12 @@ def _write_plugin(base, name, ok_result=True):
 
 
 def test_promote():
+    from easyagent.decisions import MockProvider
     plugins = tempfile.mkdtemp()
     os.makedirs(os.path.join(plugins, "inbox"))
     store = FakeStore()
     registry = ToolRegistry(plugins, store=store)
+    registry.decisions = MockProvider()
     _write_plugin(os.path.join(plugins, "inbox"), "doubler", ok_result=True)
     report = registry.promote("doubler")
     assert report["ok"], f"promote failed: {report}"
@@ -318,11 +320,13 @@ def _write_nofixture_plugin(base, name):
 
 
 def test_regularization():
+    from easyagent.decisions import MockProvider
     """RRSI four-piece port: leakage review, noise baseline, cost ledger, pruning."""
     plugins = tempfile.mkdtemp()
     os.makedirs(os.path.join(plugins, "inbox"))
     store = FakeStore()
     registry = ToolRegistry(plugins, store=store)
+    registry.decisions = MockProvider()
 
     # 1. leakage review: hardcoded fixture answer must be rejected
     _write_leaky_plugin(os.path.join(plugins, "inbox"), "leaky")

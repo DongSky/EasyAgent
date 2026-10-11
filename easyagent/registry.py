@@ -900,7 +900,7 @@ _default_registry: "ToolRegistry | None" = None
 
 def _default_plugins_dir() -> str:
     here = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(os.path.dirname(here), "plugins")
+    return os.environ.get("EASYAGENT_PLUGINS", os.path.join(os.path.dirname(here), "plugins"))
 
 
 def get_default_registry() -> "ToolRegistry":

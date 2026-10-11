@@ -39,7 +39,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from .contracts import Budget, SteerCommand
 from .store import Store
@@ -92,6 +92,13 @@ def _entrypoint(mod: Any, *names: str) -> Any | None:
 class MissionRequest(BaseModel):
     goal: str
     budget: Budget | None = None
+
+    @field_validator("goal")
+    @classmethod
+    def nonempty_goal(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("goal must not be empty")
+        return value.strip()
 
 
 class PromoteRequest(BaseModel):
@@ -281,6 +288,8 @@ def steer_run(run_id: str, cmd: SteerCommand) -> dict:
     run = _store.get_run(run_id)
     if run is None:
         raise HTTPException(404, "run not found")
+    if run.status in ("done", "failed", "cancelled"):
+        raise HTTPException(409, "run has already finished")
     try:
         loop = _require_sibling("loop")
     except ModulePending as exc:
@@ -288,8 +297,8 @@ def steer_run(run_id: str, cmd: SteerCommand) -> dict:
     queue = _entrypoint(loop, "queue_command")
     if queue is None:
         raise HTTPException(503, "loop module pending (no queue_command entrypoint)")
-    queue(run_id, cmd)
-    _store.append_event(run_id, "steer", cmd.model_dump())
+    if not queue(run_id, cmd):
+        raise HTTPException(409, "run is not active; resume from a checkpoint")
     return {"ok": True, "run_id": run_id, "action": cmd.action}
 
 
@@ -336,7 +345,8 @@ def promote_tool(req: PromoteRequest) -> dict:
     promote = _entrypoint(registry, "promote")
     if promote is None:
         raise HTTPException(503, "registry module pending (no promote entrypoint)")
-    return {"ok": True, "name": req.name, "result": promote(req.name)}
+    result = promote(req.name)
+    return {"ok": bool(result.get("ok")), "name": req.name, "result": result}
 
 
 app.include_router(v1)

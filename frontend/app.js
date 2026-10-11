@@ -68,6 +68,9 @@ let missionId = null;
 let lastSeq = 0;
 let eventSource = null;
 let pollTimer = null;
+let reconnectTimer = null;
+let streamGeneration = 0;
+let streamEnded = false;
 let terminal = false;
 let eventCount = 0;
 let budget = { max_steps: 50, max_cost_usd: null, max_wall_clock_s: 1800 };
@@ -110,6 +113,9 @@ $('missionForm').addEventListener('submit', async (e) => {
 // ---------------- run view ----------------
 function openRun(id, mid) {
   closeStream();
+  runId = id;
+  missionId = mid;
+  streamEnded = false;
   terminal = false;
   lastSeq = 0;
   eventCount = 0;
@@ -121,6 +127,7 @@ function openRun(id, mid) {
   $('planList').innerHTML = '<li class="hint">等待 plan 事件…</li>';
   $('artifactList').innerHTML = '<span class="hint">等待 artifact 事件…</span>';
   $('bEvents').textContent = '0';
+  $('bSteps').textContent = '0';
   setStatus('pending');
   initCanvas();
   connectSSE();
@@ -130,6 +137,9 @@ function openRun(id, mid) {
 }
 
 function closeStream() {
+  streamGeneration += 1;
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
   if (eventSource) {
     eventSource.close();
     eventSource = null;
@@ -149,19 +159,28 @@ function setStatus(s) {
   };
   badge.textContent = labels[s] || s;
   badge.className = 'badge st-' + s;
+  document.querySelectorAll('[data-steer], #redirectBtn, #redirectMsg').forEach((el) => {
+    el.disabled = TERMINAL.includes(s);
+  });
   if (TERMINAL.includes(s)) {
     terminal = true;
-    closeStream();
+    // State can reach terminal before SSE has replayed the final artifacts.
+    // Only the server's end event closes the stream.
+    clearInterval(pollTimer);
+    pollTimer = null;
   }
 }
 
 // SPEC §8: GET /runs/{id} → RunState
 async function pollRunState() {
-  if (!runId || terminal) return;
+  if (!runId) return;
+  const id = runId;
+  const seq = lastSeq;
   try {
     const res = await api(`/runs/${encodeURIComponent(runId)}`);
     if (!res.ok) return;
     const st = await res.json();
+    if (id !== runId || seq !== lastSeq) return;
     if (st.status) setStatus(st.status);
     if (typeof st.step === 'number') $('bSteps').textContent = st.step;
   } catch {
@@ -172,20 +191,29 @@ async function pollRunState() {
 // ---------------- SSE ----------------
 // SPEC §8: GET /v1/runs/{id}/events?after_seq=N → text/event-stream
 async function connectSSE() {
-  closeStream();
+  const generation = ++streamGeneration;
+  if (eventSource) eventSource.close();
   const url = await sseUrl(`/runs/${encodeURIComponent(runId)}/events` + (lastSeq ? `?after_seq=${lastSeq}` : ''));
+  if (generation !== streamGeneration || streamEnded) return;
   const es = new EventSource(url);
   eventSource = es;
   const TYPES = ['plan', 'thought', 'tool_call', 'tool_result', 'artifact', 'checkpoint', 'status', 'steer', 'done', 'error', 'tools_trimmed', 'prune_candidates'];
   es.onmessage = (e) => handleRaw('message', e.data);
   for (const t of TYPES) es.addEventListener(t, (e) => handleRaw(t, e.data));
+  es.addEventListener('end', () => {
+    if (generation !== streamGeneration) return;
+    streamEnded = true;
+    closeStream();
+    pollRunState();
+    if (!planItemsSeen) $('planList').innerHTML = '<li class="hint">本次运行未提供计划</li>';
+  });
   es.onerror = () => {
-    if (terminal) return;
+    if (generation !== streamGeneration || streamEnded) return;
     logLine('error', 'SSE 连接中断，2s 后按 after_seq=' + lastSeq + ' 重连…');
     es.close();
     if (eventSource === es) eventSource = null;
-    setTimeout(() => {
-      if (!terminal && !eventSource) connectSSE();
+    reconnectTimer = setTimeout(() => {
+      if (generation === streamGeneration && !streamEnded && !eventSource) connectSSE();
     }, 2000);
   };
 }
@@ -199,6 +227,7 @@ function handleRaw(eventName, data) {
   let seq = null;
   try {
     const obj = JSON.parse(data);
+    if (obj?.hello) return;
     if (obj && typeof obj === 'object' && 'type' in obj && 'payload' in obj) {
       type = type || obj.type;
       payload = obj.payload;
@@ -210,7 +239,10 @@ function handleRaw(eventName, data) {
     /* 纯文本 payload */
   }
   if (!type) type = 'message';
-  if (seq !== null && seq > lastSeq) lastSeq = seq;
+  if (seq !== null) {
+    if (seq <= lastSeq) return;
+    lastSeq = seq;
+  }
   eventCount += 1;
   $('bEvents').textContent = eventCount;
   renderEvent(type, payload);
@@ -223,7 +255,7 @@ function renderEvent(type, payload) {
       logLine('plan', '收到计划（' + planItems(payload).length + ' 步）');
       break;
     case 'thought':
-      logLine('thought', trunc(payload?.text ?? payload));
+      logLine('thought', esc(trunc(payload?.text ?? payload?.content ?? payload)));
       break;
     case 'tool_call':
       onToolCall(payload);
@@ -238,7 +270,7 @@ function renderEvent(type, payload) {
     case 'status':
       if (payload?.status) setStatus(payload.status);
       if (typeof payload?.step === 'number') $('bSteps').textContent = payload.step;
-      logLine('status', trunc(payload));
+      logLine('status', esc(trunc(payload)));
       break;
     case 'checkpoint':
       logLine('status', 'checkpoint @ step ' + (payload?.step ?? '?'));
@@ -247,14 +279,14 @@ function renderEvent(type, payload) {
       logLine('status', 'steer 已接收：' + esc(payload?.action ?? JSON.stringify(payload)));
       break;
     case 'done':
-      logLine('status', 'run 结束：' + trunc(payload));
+      logLine('status', 'run 结束：' + esc(trunc(payload)));
       setStatus(payload?.status || 'done');
       break;
     case 'error':
-      logLine('error', trunc(payload));
+      logLine('error', esc(trunc(payload)));
       break;
     default:
-      logLine('message', trunc(payload));
+      logLine('message', esc(trunc(payload)));
   }
 }
 
@@ -269,6 +301,7 @@ function logLine(tag, html) {
 }
 
 // ---------------- plan ----------------
+let planItemsSeen = false;
 function planItems(payload) {
   if (Array.isArray(payload)) return payload;
   if (Array.isArray(payload?.plan)) return payload.plan;
@@ -276,6 +309,7 @@ function planItems(payload) {
   return [];
 }
 function renderPlan(payload) {
+  planItemsSeen = true;
   const items = planItems(payload);
   $('planList').innerHTML = items.length
     ? items.map((s) => `<li>${esc(typeof s === 'string' ? s : s.text || s.name || JSON.stringify(s))}</li>`).join('')
@@ -312,7 +346,7 @@ function onToolCall(payload) {
 function onToolResult(payload) {
   const callId = payload?.call_id ?? payload?.id;
   const nodeId = callId ? callNode.get(String(callId)) : [...callNode.values()].pop();
-  const ok = payload?.ok ?? payload?.success;
+  const ok = payload?.ok ?? payload?.success ?? payload?.result?.ok ?? payload?.result?.success;
   const mark = ok === false ? '✗' : '✓';
   if (nodeId && canvasDoc.metadata.step_labels[nodeId]) {
     canvasDoc.metadata.step_labels[nodeId] += ` ${mark}`;
@@ -369,6 +403,7 @@ let editor = null;
 const canvasDoc = { steps: [], metadata: { step_labels: {} } };
 
 function initCanvas() {
+  planItemsSeen = false;
   callSeq = 0;
   callNode.clear();
   canvasDoc.steps = [];
@@ -378,7 +413,7 @@ function initCanvas() {
   editor = graphEditor({
     root,
     read: () => structuredClone(canvasDoc),
-    write: () => {}, // 运行视图只做观察，不持久化用户编辑
+    write: (doc) => { canvasDoc.metadata.editor = doc.metadata?.editor; },
     tools: () => [],
     models: () => [],
     flash,
@@ -395,6 +430,7 @@ function refreshCanvas() {
 // SPEC §8: POST /v1/runs/{id}/steer {action, message?}
 async function steer(action, message) {
   if (!runId) return flash('还没有运行中的 run');
+  if (terminal) return flash('运行已结束，不能再发送控制指令');
   const body = { action };
   if (message) body.message = message;
   try {
@@ -405,8 +441,7 @@ async function steer(action, message) {
     });
     if (!res.ok) return flash('steer 失败：HTTP ' + res.status);
     flash(`steer 已发送：${action}`);
-    if (action === 'pause') setStatus('paused');
-    if (action === 'resume') pollRunState();
+    pollRunState();
   } catch (err) {
     flash('steer 失败：' + err.message);
   }

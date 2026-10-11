@@ -308,7 +308,7 @@ _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 def plugins_root() -> Path:
     root = os.environ.get(
         "EASYAGENT_PLUGINS",
-        str(Path.home() / "workspace" / "easyagent-rewrite" / "plugins"),
+        str(Path(__file__).resolve().parents[2] / "plugins"),
     )
     return Path(root).expanduser()
 

@@ -1,7 +1,7 @@
 """file.read / file.write / file.edit.
 
 All paths are constrained inside ``EASYAGENT_WORKSPACE``
-(default ``~/workspace/easyagent-rewrite/work``) plus extra roots
+(default the repository's ``work/`` directory) plus extra roots
 (``EASYAGENT_FILE_EXTRA_ROOTS``, default: the plugin tree, so the agent can
 iterate on scaffolded plugins). Paths are resolved (symlinks included) and
 any escape outside these roots is refused.
@@ -71,7 +71,7 @@ TOOL_INFOS = [
 def workspace_root() -> Path:
     root = os.environ.get(
         "EASYAGENT_WORKSPACE",
-        str(Path.home() / "workspace" / "easyagent-rewrite" / "work"),
+        str(Path(__file__).resolve().parents[2] / "work"),
     )
     p = Path(root).expanduser().resolve()
     p.mkdir(parents=True, exist_ok=True)

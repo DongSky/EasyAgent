@@ -32,9 +32,9 @@ SteerAction = Literal["pause", "resume", "cancel", "redirect"]
 
 
 class Budget(BaseModel):
-    max_steps: int = 50
-    max_cost_usd: float | None = None
-    max_wall_clock_s: int = 1800
+    max_steps: int = Field(default=50, ge=1)
+    max_cost_usd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    max_wall_clock_s: int = Field(default=1800, ge=1)
 
 
 class Mission(BaseModel):
